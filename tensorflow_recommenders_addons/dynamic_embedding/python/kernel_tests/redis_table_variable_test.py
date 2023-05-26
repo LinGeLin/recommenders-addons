@@ -415,6 +415,7 @@ class RedisVariableTest(test.TestCase):
         sorted_values = np.sort(self.evaluate(exported_values), axis=0)
         self.assertAllEqual(_convert([0, 2, 3], key_dtype),
                             _convert(sorted_keys, key_dtype))
+        print("sorted values: ", sorted_values)
         self.assertAllEqual(
             _convert([[0] * dim, [2] * dim, [3] * dim], value_dtype),
             _convert(sorted_values, value_dtype))

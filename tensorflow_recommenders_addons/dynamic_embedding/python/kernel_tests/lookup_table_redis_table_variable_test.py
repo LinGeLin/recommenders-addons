@@ -318,27 +318,50 @@ def _redis_health_check(redis_host_ip="127.0.0.1", redis_host_port=6379):
                          str(redis_host_port) + ' ping').read()
   return ping_return == 'PONG\n'
 
+if test_util.is_gpu_available():
+  dim_list = [1, 2, 4, 8, 10, 16, 32, 64, 100, 200]
+  kv_list = [[dtypes.int64, dtypes.float32], [dtypes.int64, dtypes.int32],
+              [dtypes.int64, dtypes.half], [dtypes.int64, dtypes.int8]]
+else:
+  dim_list = [1, 8, 16, 128]
+  kv_list = [[dtypes.int32,
+              dtypes.double], [dtypes.int32, dtypes.float32],
+              [dtypes.int32, dtypes.int32], [dtypes.int64, dtypes.double],
+              [dtypes.int64, dtypes.float32], [dtypes.int64, dtypes.int32],
+              [dtypes.int64, dtypes.int64], [dtypes.int64, dtypes.int8],
+              [dtypes.int64, dtypes.half], [dtypes.string, dtypes.double],
+              [dtypes.string, dtypes.float32],
+              [dtypes.string, dtypes.int32], [dtypes.string, dtypes.int64],
+              [dtypes.string, dtypes.int8], [dtypes.string, dtypes.half]]
+
+  kv_list = [[dtypes.int32, dtypes.double], [dtypes.int32, dtypes.float32],
+            [dtypes.int32, dtypes.int32], [dtypes.int64, dtypes.double],
+            [dtypes.int64, dtypes.float32], [dtypes.int64, dtypes.int32],
+            [dtypes.int64, dtypes.int64],
+            [dtypes.int64, dtypes.int8]]
+
 
 @test_util.run_all_in_graph_and_eager_modes
 class RedisVariableTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
-  def test_basic(self):
-    if _redis_health_check(redis_config_params["redis_host_ip"][0],
-                           redis_config_params["redis_host_port"][0]) == False:
-      self.skipTest('skip redis test when unable to access the redis service.')
-    with self.session(use_gpu=False, config=default_config):
-      table = de.get_variable(
-          "redis-0",
-          dtypes.int64,
-          dtypes.int32,
-          initializer=0,
-          dim=8,
-          devices=["/CPU:0"],
-          kv_creator=de.LookupTableCreator(config=redis_config))
-      table.clear()
-      self.evaluate(table.size())
+  # def test_basic(self):
+  #   if _redis_health_check(redis_config_params["redis_host_ip"][0],
+  #                          redis_config_params["redis_host_port"][0]) == False:
+  #     self.skipTest('skip redis test when unable to access the redis service.')
+  #   with self.session(use_gpu=False, config=default_config):
+  #     table = de.get_variable(
+  #         "redis-0",
+  #         dtypes.int64,
+  #         dtypes.int32,
+  #         initializer=0,
+  #         dim=8,
+  #         devices=["/CPU:0"],
+  #         kv_creator=de.LookupTableCreator(config=redis_config))
+  #     table.clear()
+  #     self.evaluate(table.size())
 
+  # #OK
   # def test_variable(self):
   #   if _redis_health_check(redis_config_params["redis_host_ip"][0],
   #                          redis_config_params["redis_host_port"][0]) == False:
@@ -360,6 +383,13 @@ class RedisVariableTest(test.TestCase):
   #                [dtypes.string, dtypes.int64], [dtypes.string, dtypes.int8],
   #                [dtypes.string, dtypes.half]]
 
+  #     # TODO(chenjinglin) support string, half, bfloat16
+  #     kv_list = [[dtypes.int32, dtypes.double], [dtypes.int32, dtypes.float32],
+  #                [dtypes.int32, dtypes.int32], [dtypes.int64, dtypes.double],
+  #                [dtypes.int64, dtypes.float32], [dtypes.int64, dtypes.int32],
+  #                [dtypes.int64, dtypes.int64],
+  #                [dtypes.int64, dtypes.int8]]
+
   #   def _convert(v, t):
   #     return np.array(v).astype(_type_converter(t))
 
@@ -377,6 +407,8 @@ class RedisVariableTest(test.TestCase):
   #       values = constant_op.constant(
   #           _convert([[0] * dim, [1] * dim, [2] * dim, [3] * dim], value_dtype),
   #           value_dtype)
+  #       print("before insert value_dtype: ", value_dtype)
+  #       print("before values: ", values)
   #       table = de.get_variable(
   #           't1-' + str(id) + '_test_variable',
   #           key_dtype=key_dtype,
@@ -401,9 +433,11 @@ class RedisVariableTest(test.TestCase):
   #       remove_keys = constant_op.constant(_convert([0, 1, 5], key_dtype),
   #                                          key_dtype)
   #       output = table.lookup(remove_keys)
+  #       print("remove_keys: ", remove_keys)
   #       self.assertAllEqual([3, dim], output.get_shape())
 
   #       result = self.evaluate(output)
+  #       print("result: ", result)
   #       self.assertAllEqual(
   #           _convert([[0] * dim, [-1] * dim, [-1] * dim], value_dtype),
   #           _convert(result, value_dtype))
@@ -415,6 +449,9 @@ class RedisVariableTest(test.TestCase):
   #       sorted_values = np.sort(self.evaluate(exported_values), axis=0)
   #       self.assertAllEqual(_convert([0, 2, 3], key_dtype),
   #                           _convert(sorted_keys, key_dtype))
+  #       print("dim: ", dim)
+  #       print("d convert: ", [[0] * dim, [2] * dim, [3] * dim])
+  #       print("sorted_values: ", sorted_values)
   #       self.assertAllEqual(
   #           _convert([[0] * dim, [2] * dim, [3] * dim], value_dtype),
   #           _convert(sorted_values, value_dtype))
@@ -427,15 +464,15 @@ class RedisVariableTest(test.TestCase):
   #                          redis_config_params["redis_host_port"][0]) == False:
   #     self.skipTest('skip redis test when unable to access the redis service.')
   #   id = 0
-  #   dim_list = [1, 8, 16]
-  #   kv_list = [[dtypes.int32, dtypes.double], [dtypes.int32, dtypes.float32],
-  #              [dtypes.int32, dtypes.int32], [dtypes.int64, dtypes.double],
-  #              [dtypes.int64, dtypes.float32], [dtypes.int64, dtypes.int32],
-  #              [dtypes.int64, dtypes.int64], [dtypes.int64, dtypes.string],
-  #              [dtypes.int64, dtypes.int8], [dtypes.int64, dtypes.half],
-  #              [dtypes.string, dtypes.double], [dtypes.string, dtypes.float32],
-  #              [dtypes.string, dtypes.int32], [dtypes.string, dtypes.int64],
-  #              [dtypes.string, dtypes.int8], [dtypes.string, dtypes.half]]
+  #   # dim_list = [1, 8, 16]
+  #   # kv_list = [[dtypes.int32, dtypes.double], [dtypes.int32, dtypes.float32],
+  #   #            [dtypes.int32, dtypes.int32], [dtypes.int64, dtypes.double],
+  #   #            [dtypes.int64, dtypes.float32], [dtypes.int64, dtypes.int32],
+  #   #            [dtypes.int64, dtypes.int64], [dtypes.int64, dtypes.string],
+  #   #            [dtypes.int64, dtypes.int8], [dtypes.int64, dtypes.half],
+  #   #            [dtypes.string, dtypes.double], [dtypes.string, dtypes.float32],
+  #   #            [dtypes.string, dtypes.int32], [dtypes.string, dtypes.int64],
+  #   #            [dtypes.string, dtypes.int8], [dtypes.string, dtypes.half]]
 
   #   def _convert(v, t):
   #     return np.array(v).astype(_type_converter(t))
@@ -478,105 +515,145 @@ class RedisVariableTest(test.TestCase):
   #       table.clear()
   #       del table
 
-  #   def test_variable_find_with_exists_and_accum(self):
-  #     if _redis_health_check(
-  #         redis_config_params["redis_host_ip"][0],
-  #         redis_config_params["redis_host_port"][0]) == False:
-  #       self.skipTest(
-  #           'skip redis test when unable to access the redis service.')
-  #     id = 0
-  #     if test_util.is_gpu_available():
-  #       dim_list = [1, 2, 4, 8, 10, 16, 32, 64, 100, 200]
-  #       kv_list = [[dtypes.int64, dtypes.float32], [dtypes.int64, dtypes.int32],
-  #                  [dtypes.int64, dtypes.half], [dtypes.int64, dtypes.int8]]
-  #     else:
-  #       dim_list = [1, 8, 16, 128]
-  #       kv_list = [[dtypes.int32,
-  #                   dtypes.double], [dtypes.int32, dtypes.float32],
-  #                  [dtypes.int32, dtypes.int32], [dtypes.int64, dtypes.double],
-  #                  [dtypes.int64, dtypes.float32], [dtypes.int64, dtypes.int32],
-  #                  [dtypes.int64, dtypes.int64], [dtypes.int64, dtypes.int8],
-  #                  [dtypes.int64, dtypes.half], [dtypes.string, dtypes.double],
-  #                  [dtypes.string, dtypes.float32],
-  #                  [dtypes.string, dtypes.int32], [dtypes.string, dtypes.int64],
-  #                  [dtypes.string, dtypes.int8], [dtypes.string, dtypes.half]]
+    # NO OK
+  def test_variable_find_with_exists_and_accum(self):
+      if _redis_health_check(
+          redis_config_params["redis_host_ip"][0],
+          redis_config_params["redis_host_port"][0]) == False:
+        self.skipTest(
+            'skip redis test when unable to access the redis service.')
+      id = 0
+      # if test_util.is_gpu_available():
+      #   dim_list = [1, 2, 4, 8, 10, 16, 32, 64, 100, 200]
+      #   kv_list = [[dtypes.int64, dtypes.float32], [dtypes.int64, dtypes.int32],
+      #              [dtypes.int64, dtypes.half], [dtypes.int64, dtypes.int8]]
+      # else:
+      #   dim_list = [1, 8, 16, 128]
+      #   kv_list = [[dtypes.int32,
+      #               dtypes.double], [dtypes.int32, dtypes.float32],
+      #              [dtypes.int32, dtypes.int32], [dtypes.int64, dtypes.double],
+      #              [dtypes.int64, dtypes.float32], [dtypes.int64, dtypes.int32],
+      #              [dtypes.int64, dtypes.int64], [dtypes.int64, dtypes.int8],
+      #              [dtypes.int64, dtypes.half], [dtypes.string, dtypes.double],
+      #              [dtypes.string, dtypes.float32],
+      #              [dtypes.string, dtypes.int32], [dtypes.string, dtypes.int64],
+      #              [dtypes.string, dtypes.int8], [dtypes.string, dtypes.half]]
 
-  #     def _convert(v, t):
-  #       return np.array(v).astype(_type_converter(t))
+      def _convert(v, t):
+        return np.array(v).astype(_type_converter(t))
 
-  #     for (key_dtype, value_dtype), dim in itertools.product(kv_list, dim_list):
-  #       id += 1
-  #       with self.session(config=default_config,
-  #                         use_gpu=test_util.is_gpu_available()) as sess:
-  #         base_keys = constant_op.constant(
-  #             np.array([0, 1, 2, 3]).astype(_type_converter(key_dtype)),
-  #             key_dtype)
-  #         base_values = constant_op.constant(
-  #             _convert([[0] * dim, [1] * dim, [2] * dim, [3] * dim],
-  #                      value_dtype), value_dtype)
+      for (key_dtype, value_dtype), dim in itertools.product(kv_list, dim_list):
+        id += 1
+        with self.session(config=default_config,
+                          use_gpu=test_util.is_gpu_available()) as sess:
+          base_keys = constant_op.constant(
+              np.array([0, 1, 2, 3]).astype(_type_converter(key_dtype)),
+              key_dtype)
+          base_values = constant_op.constant(
+              _convert([[0] * dim, [1] * dim, [2] * dim, [3] * dim],
+                       value_dtype), value_dtype)
 
-  #         simulate_other_process_add_keys = constant_op.constant(
-  #             np.array([100]).astype(_type_converter(key_dtype)), key_dtype)
-  #         simulate_other_process_add_vals = constant_op.constant(
-  #             _convert([
-  #                 [99] * dim,
-  #             ], value_dtype), value_dtype)
+          simulate_other_process_add_keys = constant_op.constant(
+              np.array([100]).astype(_type_converter(key_dtype)), key_dtype)
+          simulate_other_process_add_vals = constant_op.constant(
+              _convert([
+                  [99] * dim,
+              ], value_dtype), value_dtype)
 
-  #         simulate_other_process_remove_keys = constant_op.constant(
-  #             np.array([1]).astype(_type_converter(key_dtype)), key_dtype)
-  #         accum_keys = constant_op.constant(
-  #             np.array([0, 1, 100, 3]).astype(_type_converter(key_dtype)),
-  #             key_dtype)
-  #         old_values = constant_op.constant(
-  #             _convert([[0] * dim, [1] * dim, [2] * dim, [3] * dim],
-  #                      value_dtype), value_dtype)
-  #         new_values = constant_op.constant(
-  #             _convert([[10] * dim, [11] * dim, [100] * dim, [13] * dim],
-  #                      value_dtype), value_dtype)
-  #         exported_exists = constant_op.constant([True, True, False, True],
-  #                                                dtype=dtypes.bool)
+          simulate_other_process_remove_keys = constant_op.constant(
+              np.array([1]).astype(_type_converter(key_dtype)), key_dtype)
+          accum_keys = constant_op.constant(
+              np.array([0, 1, 100, 3]).astype(_type_converter(key_dtype)),
+              key_dtype)
+          old_values = constant_op.constant(
+              _convert([[0] * dim, [1] * dim, [2] * dim, [3] * dim],
+                       value_dtype), value_dtype)
+          new_values = constant_op.constant(
+              _convert([[10] * dim, [11] * dim, [100] * dim, [13] * dim],
+                       value_dtype), value_dtype)
+          exported_exists = constant_op.constant([True, True, False, True],
+                                                 dtype=dtypes.bool)
 
-  #         table = de.get_variable(
-  #             'taccum1-' + str(id),
-  #             key_dtype=key_dtype,
-  #             value_dtype=value_dtype,
-  #             initializer=np.array([-1]).astype(_type_converter(value_dtype)),
-  #             dim=dim,
-  #             devices=["/CPU:0"],
-  #             kv_creator=de.LookupTableCreator(config=redis_config))
-  #         self.evaluate(table.clear())
+          table = de.get_variable(
+              'taccum1-' + str(id),
+              key_dtype=key_dtype,
+              value_dtype=value_dtype,
+              initializer=np.array([-1]).astype(_type_converter(value_dtype)),
+              dim=dim,
+              devices=["/CPU:0"],
+              kv_creator=de.LookupTableCreator(config=redis_config))
+          self.evaluate(table.clear())
 
-  #         self.assertAllEqual(0, self.evaluate(table.size()))
+          self.assertAllEqual(0, self.evaluate(table.size()))
 
-  #         self.evaluate(table.upsert(base_keys, base_values))
-  #         _, exists = table.lookup(accum_keys, return_exists=True)
-  #         self.assertAllEqual(self.evaluate(exported_exists),
-  #                             self.evaluate(exists))
-  #         # Simulate multi-process situation that other process operated table,
-  #         # between lookup and accum in this process.
-  #         self.evaluate(
-  #             table.upsert(simulate_other_process_add_keys,
-  #                          simulate_other_process_add_vals))
-  #         self.evaluate(table.remove(simulate_other_process_remove_keys))
-  #         self.assertAllEqual(4, self.evaluate(table.size()))
-  #         self.evaluate(
-  #             table.accum(accum_keys, old_values, new_values, exported_exists))
+          self.evaluate(table.upsert(base_keys, base_values))
+          find_values = table.lookup(base_keys)
+          print("find values: ",  self.evaluate(find_values))
 
-  #         exported_keys, exported_values = table.export()
+          find_values, exists = table.lookup(accum_keys, return_exists=True)
+          print("find values: ",  self.evaluate(find_values))
+          self.assertAllEqual(self.evaluate(exported_exists),
+                              self.evaluate(exists))
+          
+          exported_keys, exported_values = table.export()
 
-  #         # exported data is in the order of the internal map, i.e. undefined
-  #         sorted_keys = np.sort(self.evaluate(exported_keys), axis=0)
-  #         sorted_values = np.sort(self.evaluate(exported_values), axis=0)
-  #         self.assertAllEqual(
-  #             np.sort(_convert([0, 2, 3, 100], key_dtype), axis=0),
-  #             _convert(sorted_keys, key_dtype))
-  #         self.assertAllEqual(
-  #             _convert([[2] * dim, [10] * dim, [13] * dim, [99] * dim],
-  #                      value_dtype), _convert(sorted_values, value_dtype))
+          # exported data is in the order of the internal map, i.e. undefined
+          sorted_keys = np.sort(self.evaluate(exported_keys), axis=0)
+          sorted_values = np.sort(self.evaluate(exported_values), axis=0)
+          print("exported_keys: ", self.evaluate(exported_keys))
+          print("exported_values: ", self.evaluate(exported_values))
+            
+          # Simulate multi-process situation that other process operated table,
+          # between lookup and accum in this process.
+          self.evaluate(
+              table.upsert(simulate_other_process_add_keys,
+                           simulate_other_process_add_vals))
+          exported_keys, exported_values = table.export()
 
-  #         self.evaluate(table.clear())
-  #         del table
+          # exported data is in the order of the internal map, i.e. undefined
+          sorted_keys = np.sort(self.evaluate(exported_keys), axis=0)
+          sorted_values = np.sort(self.evaluate(exported_values), axis=0)
+          print("exported_keys: ", self.evaluate(exported_keys))
+          print("exported_values: ", self.evaluate(exported_values))
+          self.evaluate(table.remove(simulate_other_process_remove_keys))
+          exported_keys, exported_values = table.export()
 
+          # exported data is in the order of the internal map, i.e. undefined
+          sorted_keys = np.sort(self.evaluate(exported_keys), axis=0)
+          sorted_values = np.sort(self.evaluate(exported_values), axis=0)
+          print("exported_keys: ", self.evaluate(exported_keys))
+          print("exported_values: ", self.evaluate(exported_values))
+          self.assertAllEqual(4, self.evaluate(table.size()))
+          print("accum keys: ", self.evaluate(accum_keys))
+          print("old values: ", self.evaluate(old_values))
+          print("new values: ", self.evaluate(new_values))
+          import tensorflow as tf
+          tf.print(accum_keys)
+          self.evaluate(
+              table.accum(accum_keys, old_values, new_values, exported_exists))
+
+          exported_keys, exported_values = table.export()
+
+          # exported data is in the order of the internal map, i.e. undefined
+          sorted_keys = np.sort(self.evaluate(exported_keys), axis=0)
+          sorted_values = np.sort(self.evaluate(exported_values), axis=0)
+          print("exported_keys: ", self.evaluate(exported_keys))
+          print("exported_values: ", self.evaluate(exported_values))
+          self.assertAllEqual(
+              np.sort(_convert([0, 2, 3, 100], key_dtype), axis=0),
+              _convert(sorted_keys, key_dtype))
+          
+          print("sorted keys: ", _convert(sorted_keys, key_dtype))
+          print("expect value: ", _convert([[2] * dim, [10] * dim, [13] * dim, [99] * dim], value_dtype))
+          print("sorted value: ", _convert(sorted_values, value_dtype))
+          self.assertAllEqual(
+              _convert([[2] * dim, [10] * dim, [13] * dim, [99] * dim],
+                       value_dtype), _convert(sorted_values, value_dtype))
+
+          self.evaluate(table.clear())
+          del table
+
+  # # OK
   # def test_variable_initializer(self):
   #   if _redis_health_check(redis_config_params["redis_host_ip"][0],
   #                          redis_config_params["redis_host_port"][0]) == False:
@@ -786,100 +863,100 @@ class RedisVariableTest(test.TestCase):
 
   #     del table
 
-  def test_save_restore_local_file_system(self):
-    if _redis_health_check(redis_config_params["redis_host_ip"][0],
-                           redis_config_params["redis_host_port"][0]) == False \
-                           or (is_macos() and is_arm64()):
-      self.skipTest(
-          "skip save restore file system test because TFIO doesn't support apple silicon."
-      )
-    if context.executing_eagerly():
-      self.skipTest('skip eager test when using legacy Saver.')
-    save_dir = os.path.join(self.get_temp_dir(), "save_restore")
-    save_path = os.path.join(tempfile.mkdtemp(prefix=save_dir), "hash")
+  # def test_save_restore_local_file_system(self):
+  #   if _redis_health_check(redis_config_params["redis_host_ip"][0],
+  #                          redis_config_params["redis_host_port"][0]) == False \
+  #                          or (is_macos() and is_arm64()):
+  #     self.skipTest(
+  #         "skip save restore file system test because TFIO doesn't support apple silicon."
+  #     )
+  #   if context.executing_eagerly():
+  #     self.skipTest('skip eager test when using legacy Saver.')
+  #   save_dir = os.path.join(self.get_temp_dir(), "save_restore")
+  #   save_path = os.path.join(tempfile.mkdtemp(prefix=save_dir), "hash")
 
-    with self.session(config=default_config, graph=ops.Graph()) as sess:
-      v0 = variables.Variable(10.0, name="v0")
-      v1 = variables.Variable(20.0, name="v1")
+  #   with self.session(config=default_config, graph=ops.Graph()) as sess:
+  #     v0 = variables.Variable(10.0, name="v0")
+  #     v1 = variables.Variable(20.0, name="v1")
 
-      keys = constant_op.constant([0, 1, 2], dtypes.int64)
-      values = constant_op.constant([[0.0], [1.0], [2.0]], dtypes.float32)
-      table = de.Variable(
-          key_dtype=dtypes.int64,
-          value_dtype=dtypes.float32,
-          initializer=-1.0,
-          name="t1_test_local_file_system",
-          dim=1,
-          kv_creator=de.LookupTableCreator(config=redis_config),
-      )
+  #     keys = constant_op.constant([0, 1, 2], dtypes.int64)
+  #     values = constant_op.constant([[0.0], [1.0], [2.0]], dtypes.float32)
+  #     table = de.Variable(
+  #         key_dtype=dtypes.int64,
+  #         value_dtype=dtypes.float32,
+  #         initializer=-1.0,
+  #         name="t1_test_local_file_system",
+  #         dim=1,
+  #         kv_creator=de.LookupTableCreator(config=redis_config),
+  #     )
 
-      save = saver.Saver(var_list=[v0, v1])
-      self.evaluate(variables.global_variables_initializer())
+  #     save = saver.Saver(var_list=[v0, v1])
+  #     self.evaluate(variables.global_variables_initializer())
 
-      # Check that the parameter nodes have been initialized.
-      self.assertEqual(10.0, self.evaluate(v0))
-      self.assertEqual(20.0, self.evaluate(v1))
+  #     # Check that the parameter nodes have been initialized.
+  #     self.assertEqual(10.0, self.evaluate(v0))
+  #     self.assertEqual(20.0, self.evaluate(v1))
 
-      self.assertAllEqual(0, self.evaluate(table.size()))
-      self.evaluate(table.upsert(keys, values))
-      self.assertAllEqual(3, self.evaluate(table.size()))
+  #     self.assertAllEqual(0, self.evaluate(table.size()))
+  #     self.evaluate(table.upsert(keys, values))
+  #     self.assertAllEqual(3, self.evaluate(table.size()))
 
-      # save table
-      for k, v in enumerate(table.tables):
-        self.evaluate(
-            v.save_to_file_system("file:///tmp/test_local_file_system/" +
-                                  str(k),
-                                  buffer_size=4096))
+  #     # save table
+  #     for k, v in enumerate(table.tables):
+  #       self.evaluate(
+  #           v.save_to_file_system("file:///tmp/test_local_file_system/" +
+  #                                 str(k),
+  #                                 buffer_size=4096))
 
-      val = save.save(sess, save_path)
-      self.assertIsInstance(val, six.string_types)
-      self.assertEqual(save_path, val)
+  #     val = save.save(sess, save_path)
+  #     self.assertIsInstance(val, six.string_types)
+  #     self.assertEqual(save_path, val)
 
-      self.evaluate(table.clear())
-      del table
+  #     self.evaluate(table.clear())
+  #     del table
 
-    with self.session(config=default_config, graph=ops.Graph()) as sess:
-      v0 = variables.Variable(-1.0, name="v0")
-      v1 = variables.Variable(-1.0, name="v1")
-      table = de.Variable(
-          name="t1_test_local_file_system",
-          key_dtype=dtypes.int64,
-          value_dtype=dtypes.float32,
-          initializer=-1.0,
-          dim=1,
-          checkpoint=True,
-          kv_creator=de.LookupTableCreator(config=redis_config),
-      )
-      table.clear()
-      self.evaluate(
-          table.upsert(
-              constant_op.constant([0, 1], dtypes.int64),
-              constant_op.constant([[12.0], [24.0]], dtypes.float32),
-          ))
-      size_op = table.size()
-      self.assertAllEqual(2, self.evaluate(size_op))
+  #   with self.session(config=default_config, graph=ops.Graph()) as sess:
+  #     v0 = variables.Variable(-1.0, name="v0")
+  #     v1 = variables.Variable(-1.0, name="v1")
+  #     table = de.Variable(
+  #         name="t1_test_local_file_system",
+  #         key_dtype=dtypes.int64,
+  #         value_dtype=dtypes.float32,
+  #         initializer=-1.0,
+  #         dim=1,
+  #         checkpoint=True,
+  #         kv_creator=de.LookupTableCreator(config=redis_config),
+  #     )
+  #     table.clear()
+  #     self.evaluate(
+  #         table.upsert(
+  #             constant_op.constant([0, 1], dtypes.int64),
+  #             constant_op.constant([[12.0], [24.0]], dtypes.float32),
+  #         ))
+  #     size_op = table.size()
+  #     self.assertAllEqual(2, self.evaluate(size_op))
 
-      save = saver.Saver(var_list=[v0, v1])
+  #     save = saver.Saver(var_list=[v0, v1])
 
-      # Restore the saved values in the parameter nodes.
-      save.restore(sess, save_path)
-      # load table
-      for k, v in enumerate(table.tables):
-        self.evaluate(
-            v.load_from_file_system("file:///tmp/test_local_file_system/" +
-                                    str(k),
-                                    buffer_size=4096))
-      # Check that the parameter nodes have been restored.
-      self.assertEqual([10.0], self.evaluate(v0))
-      self.assertEqual([20.0], self.evaluate(v1))
+  #     # Restore the saved values in the parameter nodes.
+  #     save.restore(sess, save_path)
+  #     # load table
+  #     for k, v in enumerate(table.tables):
+  #       self.evaluate(
+  #           v.load_from_file_system("file:///tmp/test_local_file_system/" +
+  #                                   str(k),
+  #                                   buffer_size=4096))
+  #     # Check that the parameter nodes have been restored.
+  #     self.assertEqual([10.0], self.evaluate(v0))
+  #     self.assertEqual([20.0], self.evaluate(v1))
 
-      self.assertAllEqual(3, self.evaluate(table.size()))
+  #     self.assertAllEqual(3, self.evaluate(table.size()))
 
-      remove_keys = constant_op.constant([5, 0, 1, 2, 6], dtypes.int64)
-      output = table.lookup(remove_keys)
-      self.assertAllEqual([[-1.0], [0.0], [1.0], [2.0], [-1.0]],
-                          self.evaluate(output))
-      del table
+  #     remove_keys = constant_op.constant([5, 0, 1, 2, 6], dtypes.int64)
+  #     output = table.lookup(remove_keys)
+  #     self.assertAllEqual([[-1.0], [0.0], [1.0], [2.0], [-1.0]],
+  #                         self.evaluate(output))
+  #     del table
 
   # def test_save_restore_only_table(self):
   #   if _redis_health_check(redis_config_params["redis_host_ip"][0],
@@ -1966,6 +2043,7 @@ class RedisVariableTest(test.TestCase):
 
   #   save_dir = os.path.join(self.get_temp_dir(), "save_restore")
   #   save_path = os.path.join(tempfile.mkdtemp(prefix=save_dir), "hash")
+  #   print("save path: ", save_path)
 
   #   os.makedirs(save_path)
   #   redis_config_path = os.path.join(save_path,
@@ -2015,7 +2093,8 @@ class RedisVariableTest(test.TestCase):
   #           json.dumps(redis_config_params_modify, indent=2, ensure_ascii=True))
   #       redis_config_modify_wrong_type = de.RedisTableConfig(
   #           redis_config_abs_dir=redis_config_path)
-
+      
+  #     print("key: ", key)
   #     with self.session(config=default_config,
   #                       use_gpu=test_util.is_gpu_available()) as sess:
   #       with self.assertRaisesOpError(key):

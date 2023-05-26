@@ -27,12 +27,15 @@ limitations under the License.
 #include <sstream>
 
 #include "md5.h"
-#include "tensorflow/core/framework/tensor.h"
-#include "tensorflow/core/framework/types.h"
+// #include "tensorflow/core/framework/tensor.h"
+// #include "tensorflow/core/framework/types.h"
+#include "tensorflow_recommenders_addons/dynamic_embedding/core/kernels/lookup_table_types.h"
 
 namespace tensorflow {
 namespace recommenders_addons {
 namespace redis_connection {
+
+using namespace lookup_table;
 
 const static unsigned hardware_concurrency_ =
     std::thread::hardware_concurrency();
@@ -59,7 +62,7 @@ inline unsigned long get_file_size(const std::string path) {
   unsigned long filesize = 0;
   struct stat statbuff;
   if (stat(path.data(), &statbuff) < 0) {
-    LOG(WARNING) << "The file " << path << " does not exist";
+    // LOG(WARNING) << "The file " << path << " does not exist";
     return filesize;
   } else {
     filesize = statbuff.st_size;
@@ -89,11 +92,11 @@ inline std::string check_dir(const std::string path_in) {
   }
   if (access(path.c_str(), 0) == -1)  // if folder doesn't exist
   {
-    LOG(INFO) << "folder " << path << " doesn't exist";
+    // LOG(INFO) << "folder " << path << " doesn't exist";
     if (createDirectory(path) == 0) {
-      LOG(INFO) << "folder " << path << " was created";
+      // LOG(INFO) << "folder " << path << " was created";
     } else {
-      LOG(INFO) << "folder " << path << " failed to create";
+      // LOG(INFO) << "folder " << path << " failed to create";
     }
   }
   return path;
@@ -110,9 +113,9 @@ inline int ReadInt32FromEnvVar(const std::string &env_var_name,
     return 0;
   }
   *value = default_val;
-  LOG(ERROR) << "Failed to parse the env-var ${" << env_var_name
-             << "} into int32: " << _env_var_val
-             << ". Use the default value: " << default_val;
+  // LOG(ERROR) << "Failed to parse the env-var ${" << env_var_name
+  //            << "} into int32: " << _env_var_val
+  //            << ". Use the default value: " << default_val;
   return -1;
 }
 
@@ -325,8 +328,8 @@ typedef unsigned (*KBucketNumHandle)(uint32_t, const uint8_t *, size_t);
 template <typename K, typename V>
 class RedisBaseWrapper {
  protected:
-  Redis_Connection_Params redis_connection_params;
-  KBucketNumHandle K_bucket_num_handle;
+  Redis_Connection_Params redis_connection_params_;
+  KBucketNumHandle K_bucket_num_handle_;
 
  protected:
   template <typename RedisClient>
@@ -343,8 +346,8 @@ class RedisBaseWrapper {
         return false;
       }
     } else {
-      LOG(WARNING)
-          << "INFO CLUSTER has no response. Regard as a single node mode.";
+      // LOG(WARNING)
+      //     << "INFO CLUSTER has no response. Regard as a single node mode.";
       return false;
     }
   }
@@ -375,25 +378,25 @@ class RedisBaseWrapper {
   bool isRedisConnect = false;
 
  public:
-  Status set_params(struct Redis_Connection_Params &conn_params_input) {
+  TFRA_Status set_params(struct Redis_Connection_Params &conn_params_input) {
     try {
-      this->redis_connection_params = conn_params_input;
+      this->redis_connection_params_ = conn_params_input;
     } catch (const std::exception &err) {
-      return errors::Unknown(err.what());
+      return TFRA_Status(StatusCode::UNKNOWN, err.what());
     }
-    return Status::OK();
+    return TFRA_Status::OK();
   }
 
-  Status set_K_bucket_num_handle(KBucketNumHandle function) {
+  TFRA_Status set_K_bucket_num_handle(KBucketNumHandle function) {
     try {
-      K_bucket_num_handle = function;
+      K_bucket_num_handle_ = function;
     } catch (const std::exception &err) {
-      return errors::Unknown(err.what());
+      return TFRA_Status(StatusCode::UNKNOWN, err.what());
     }
-    return Status::OK();
+    return TFRA_Status::OK();
   }
 
-  virtual Status Conn() = 0;
+  virtual TFRA_Status Conn() = 0;
 
   virtual std::vector<std::string> GetKeyBucketsAndOptimizerParamsWithName(
       const std::string &keys_prefix_name, const bool only_get_buckets) = 0;
@@ -406,7 +409,7 @@ class RedisBaseWrapper {
   virtual size_t TableSizeInBucket(
       const std::string &keys_prefix_name_slice) = 0;
 
-  virtual Status RemoveHkeysInBuckets(
+  virtual TFRA_Status RemoveHkeysInBuckets(
       const std::string &keys_prefix_name_slice) = 0;
 
   virtual std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter>
@@ -417,20 +420,20 @@ class RedisBaseWrapper {
       const K *, const int64_t begin, const int64_t max_i,
       const std::string &keys_prefix_name_slice) = 0;
 
-  virtual Status SetExpireBuckets(const std::string &keys_prefix_name) = 0;
+  virtual TFRA_Status SetExpireBuckets(const std::string &keys_prefix_name) = 0;
 
-  virtual Status SetPersistBuckets(const std::string &keys_prefix_name) = 0;
+  virtual TFRA_Status SetPersistBuckets(const std::string &keys_prefix_name) = 0;
 
-  virtual Status DumpToDisk(
+  virtual TFRA_Status DumpToDisk(
       const std::vector<std::string> &keys_prefix_name_slices,
       std::vector<aiocb> &wrs, const std::vector<int> &fds) = 0;
 
-  virtual Status RestoreFromDisk(
+  virtual TFRA_Status RestoreFromDisk(
       const std::vector<std::string> &keys_prefix_name_slices,
       std::vector<aiocb> &rds, const std::vector<int> &fds,
       const std::vector<unsigned long> &buf_sizes) = 0;
 
-  virtual Status DuplicateInRedis(
+  virtual TFRA_Status DuplicateInRedis(
       const std::vector<std::string> &keys_prefix_name_slices_old,
       const std::vector<std::string> &keys_prefix_name_slices_new) = 0;
 
@@ -439,34 +442,29 @@ class RedisBaseWrapper {
               const int64_t max_i,
               const std::vector<std::string> &keys_prefix_name_slices) = 0;
 
-  virtual Status MgetToTensor(
-      V *values, const V *default_value, const bool is_full_default,
-      ThreadContext *thread_context,
-      std::vector<std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter>>
-          &reply,
-      const int64_t begin, const int64_t max_i,
-      const int64_t Velems_per_dim0) = 0;
+  virtual TFRA_Status MgetToTensor(V *values, const V *default_value, const bool is_full_default,
+            ThreadContext *thread_context,
+            std::vector<std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter>> &reply,
+            const int64_t begin, const int64_t max_i, const int64_t Velems_per_dim0) = 0;
 
-  virtual Status MgetToTensorWithExist(
+  virtual TFRA_Status MgetToTensorWithExist(
       V *values, const V *default_value, bool *exists,
       const bool is_full_default, ThreadContext *thread_context,
-      std::vector<std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter>>
-          &reply,
-      const int64_t begin, const int64_t max_i,
-      const int64_t Velems_per_dim0) = 0;
+      std::vector<std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter>> &reply,
+      const int64_t begin, const int64_t max_i, const int64_t Velems_per_dim0) = 0;
 
-  virtual Status MsetCommand(
+  virtual TFRA_Status MsetCommand(
       const K *, const V *values, ThreadContext *thread_context,
       const int64_t begin, const int64_t max_i, const int64_t Velems_per_dim0,
       const std::vector<std::string> &keys_prefix_name_slices) = 0;
 
-  virtual Status MaccumCommand(
+  virtual TFRA_Status MaccumCommand(
       const K *, const V *values, const bool *exists,
       ThreadContext *thread_context, const int64_t begin, const int64_t max_i,
       const int64_t Velems_per_dim0, std::string &values_dtype_str,
       const std::vector<std::string> &keys_prefix_name_slices) = 0;
 
-  virtual Status DelCommand(
+  virtual TFRA_Status DelCommand(
       const K *, ThreadContext *thread_context, const int64_t begin,
       const int64_t max_i,
       const std::vector<std::string> &keys_prefix_name_slices) = 0;
@@ -486,7 +484,7 @@ constexpr inline size_t KTypeSize(const T *in) {
 }
 
 template <>
-inline size_t KTypeSize<tstring>(const tstring *in) {
+inline size_t KTypeSize<std::string>(const std::string *in) {
   return in->size();
 }
 
@@ -496,7 +494,7 @@ constexpr inline const char *KContentPointer(const T *in) {
 }
 
 template <>
-inline const char *KContentPointer<tstring>(const tstring *in) {
+inline const char *KContentPointer<std::string>(const std::string *in) {
   return in->data();
 }
 
@@ -551,25 +549,46 @@ inline uint32_t crc32c_hash(uint32_t crc, const uint8_t *p, size_t length) {
 }
 
 template <typename T,
-          std::enable_if_t<(sizeof(T) <= 4) && !std::is_same<tstring, T>::value>
+          std::enable_if_t<(sizeof(T) <= 4) && !std::is_same<std::string, T>::value>
               * = nullptr>
 unsigned KBucketNumCommonHandle(uint32_t crc, const uint8_t *p, size_t length) {
   return static_cast<const unsigned>(*reinterpret_cast<const T *>(p));
 }
 
 template <typename T,
-          std::enable_if_t<(sizeof(T) > 4) && !std::is_same<tstring, T>::value>
+          std::enable_if_t<(sizeof(T) > 4) && !std::is_same<std::string, T>::value>
               * = nullptr>
 unsigned KBucketNumCommonHandle(uint32_t crc, const uint8_t *p, size_t length) {
   return static_cast<const unsigned>((*reinterpret_cast<const T *>(p)) &
                                      0x00000000FFFFFFFF);
 }
 
-template <typename T,
-          std::enable_if_t<std::is_same<tstring, T>::value> * = nullptr>
-unsigned KBucketNumCommonHandle(uint32_t crc, const uint8_t *p, size_t length) {
-  return crc32c_hash(crc, p, length);
-}
+// template <typename T,
+//           std::enable_if_t<(sizeof(T) <= 4) && !(std::is_same<std::string, T>::value || std::is_same<std::string_view, T>::value)>
+//               * = nullptr>
+// unsigned KBucketNumCommonHandle(uint32_t crc, const uint8_t *p, size_t length) {
+//   return static_cast<const unsigned>(*reinterpret_cast<const T *>(p));
+// }
+
+// template <typename T,
+//           std::enable_if_t<(sizeof(T) > 4) && !(std::is_same<std::string, T>::value || std::is_same<std::string_view, T>::value)>
+//               * = nullptr>
+// unsigned KBucketNumCommonHandle(uint32_t crc, const uint8_t *p, size_t length) {
+//   return static_cast<const unsigned>((*reinterpret_cast<const T *>(p)) &
+//                                      0x00000000FFFFFFFF);
+// }
+
+// template <typename T,
+//           std::enable_if_t<std::is_same<std::string, T>::value> * = nullptr>
+// unsigned KBucketNumCommonHandle(uint32_t crc, const uint8_t *p, size_t length) {
+//   return crc32c_hash(crc, p, length);
+// }
+
+// template <typename T,
+//           std::enable_if_t<std::is_same<std::string_view, T>::value> * = nullptr>
+// unsigned KBucketNumCommonHandle(uint32_t crc, const uint8_t *p, size_t length) {
+//   return crc32c_hash(crc, p, length);
+// }
 
 unsigned KBucketNumCRC32Handle(uint32_t crc, const uint8_t *p, size_t length) {
   return crc32c_hash(crc, p, length);
@@ -584,8 +603,8 @@ inline unsigned KBucketNum(const KBucketNumHandle handle, const T *in,
 }
 
 template <>
-inline unsigned KBucketNum<tstring>(const KBucketNumHandle handle,
-                                    const tstring *in,
+inline unsigned KBucketNum<std::string>(const KBucketNumHandle handle,
+                                    const std::string *in,
                                     const unsigned storage_slice) {
   const uint8_t *tem_char = reinterpret_cast<const uint8_t *>(in);
   return (crc32c_hash(0xffffffff, tem_char, in->length()) % storage_slice);
@@ -610,14 +629,14 @@ memory space for sending to Redis server.
 var buff is a std::vector<char> from std::vector<std::vector<char>>
 */
 template <>
-inline const VContentAndTypeSizeResult &VContentAndTypeSize<tstring>(
+inline const VContentAndTypeSizeResult &VContentAndTypeSize<std::string>(
     VContentAndTypeSizeResult &_VContentAndTypeSizeResult,
     const int64_t Velems_per_dim0, const std::size_t &V_byte_size,
-    const tstring *in, std::vector<char> &buff) {
-  const tstring *ps_end = in + Velems_per_dim0;
+    const std::string *in, std::vector<char> &buff) {
+  const std::string *ps_end = in + Velems_per_dim0;
   unsigned tot = 0;
 
-  const tstring *ps = in;
+  const std::string *ps = in;
   for (; ps != ps_end; ++ps) {
     tot = tot + sizeof(unsigned) + ps->size();
   }
@@ -653,12 +672,12 @@ void DefaultMemcpyToTensor(const T *const pv_raw, const T *dft,
 }
 
 template <>
-void DefaultMemcpyToTensor<tstring>(const tstring *const pv_raw,
-                                    const tstring *const dft,
+void DefaultMemcpyToTensor<std::string>(const std::string *const pv_raw,
+                                    const std::string *const dft,
                                     const int64_t Velems_per_dim0) {
-  const tstring *const pv_raw_end = pv_raw + Velems_per_dim0;
-  tstring *pv_it = const_cast<tstring *>(pv_raw);
-  const tstring *dft_it = dft;
+  const std::string *const pv_raw_end = pv_raw + Velems_per_dim0;
+  std::string *pv_it = const_cast<std::string *>(pv_raw);
+  const std::string *dft_it = dft;
   for (; pv_it != pv_raw_end; ++pv_it, ++dft_it) {
     *pv_it = *dft_it;
   }
@@ -673,9 +692,9 @@ void ReplyMemcpyToKeyTensor(const T *const pk_raw, const char *str,
 }
 
 template <>
-void ReplyMemcpyToKeyTensor<tstring>(const tstring *const pk_raw,
+void ReplyMemcpyToKeyTensor<std::string>(const std::string *const pk_raw,
                                      const char *str, const size_t &byte_size) {
-  (const_cast<tstring *const>(pk_raw))->assign(str, byte_size);
+  (const_cast<std::string *const>(pk_raw))->assign(str, byte_size);
 }
 
 template <typename T>
@@ -688,13 +707,13 @@ void ReplyMemcpyToValTensor(const T *const pv_raw, const char *str,
 }
 
 template <>
-void ReplyMemcpyToValTensor<tstring>(const tstring *const pv_raw,
+void ReplyMemcpyToValTensor<std::string>(const std::string *const pv_raw,
                                      const char *str,
                                      const int64_t Velems_per_dim0) {
-  const tstring *const pv_raw_end = pv_raw + Velems_per_dim0;
+  const std::string *const pv_raw_end = pv_raw + Velems_per_dim0;
   const char *char_view = str;
   unsigned str_bytesize = 0;
-  for (tstring *pv_it = const_cast<tstring *>(pv_raw); pv_it != pv_raw_end;
+  for (std::string *pv_it = const_cast<std::string *>(pv_raw); pv_it != pv_raw_end;
        ++pv_it) {
     str_bytesize = *(reinterpret_cast<const unsigned *>(char_view));
     char_view += sizeof(unsigned);

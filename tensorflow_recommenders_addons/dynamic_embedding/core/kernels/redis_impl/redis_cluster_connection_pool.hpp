@@ -22,6 +22,7 @@ limitations under the License.
 
 #include <chrono>
 #include <iostream>
+#include <algorithm>
 
 #include "redis_connection_util.hpp"
 #include "thread_pool.h"
@@ -41,16 +42,15 @@ class RedisWrapper<RedisInstance, K, V,
                        std::is_same<RedisInstance, RedisCluster>::value>::type>
     : public RedisBaseWrapper<K, V> {
  private:
-  ConnectionOptions conn_opts;
-  ConnectionPoolOptions pool_opts;
-  ThreadPool *network_worker_pool;
-  std::exception_ptr error_ptr;
+  ConnectionOptions conn_opts_;
+  ConnectionPoolOptions pool_opts_;
+  ThreadPool *network_worker_pool_ptr_;
+  std::exception_ptr error_ptr_;
 
  public:
-  std::shared_ptr<RedisInstance> redis_conn_read =
-      nullptr;  // for the hungry singleton mode
-  std::shared_ptr<RedisInstance> redis_conn_write =
-      nullptr;  // for the hungry singleton mode
+  // for the hungry singleton mode
+  std::shared_ptr<RedisInstance> redis_conn_read_ = nullptr;
+  std::shared_ptr<RedisInstance> redis_conn_write_ = nullptr;
 
  public:
   RedisWrapper(RedisInstance &&) = delete;
@@ -58,100 +58,99 @@ class RedisWrapper<RedisInstance, K, V,
   RedisWrapper &operator=(const RedisInstance &) = delete;
 
   ~RedisWrapper() {
-    if (network_worker_pool) {
-      delete network_worker_pool;
+    if (network_worker_pool_ptr_) {
+      delete network_worker_pool_ptr_;
     }
-    if (redis_conn_read == nullptr && redis_conn_write == nullptr) {
+    if (redis_conn_read_ == nullptr && redis_conn_write_ == nullptr) {
       return;
     }
-    redis_conn_read.reset();
-    redis_conn_write.reset();
-    LOG(INFO) << "RedisCluster connection pool destructor called successfully.";
+    redis_conn_read_.reset();
+    redis_conn_write_.reset();
+    // LOG(INFO) << "RedisCluster connection pool destructor called successfully.";
   }
 
  private:
   RedisWrapper()  // In singleton mode, classes should not be initialized
                   // through constructor
   {
-    network_worker_pool = new ThreadPool(hardware_concurrency_);
-    LOG(INFO)
-        << "RedisCluster connection pool constructor called successfully.";
+    network_worker_pool_ptr_ = new ThreadPool(hardware_concurrency_);
+    // LOG(INFO)
+    //     << "RedisCluster connection pool constructor called successfully.";
   }
 
  public:
   std::shared_ptr<RedisInstance> StartConn(size_t ip_port_count, Role role) {
-    conn_opts.host = this->redis_connection_params.redis_host_ip[ip_port_count];
-    conn_opts.port =
-        this->redis_connection_params.redis_host_port[ip_port_count];
+    conn_opts_.host = this->redis_connection_params_.redis_host_ip[ip_port_count];
+    conn_opts_.port =
+        this->redis_connection_params_.redis_host_port[ip_port_count];
 
-    this->SetPublicConnParams(conn_opts, pool_opts,
-                              this->redis_connection_params);
+    this->SetPublicConnParams(conn_opts_, pool_opts_,
+                              this->redis_connection_params_);
 
     try {
       auto redis_client = std::make_shared<RedisInstance>(
-          RedisInstance(conn_opts, pool_opts, role));
+          RedisInstance(conn_opts_, pool_opts_, role));
       redis_client->set("key test for connecting", "val test for connecting",
                         std::chrono::milliseconds(1));
       if (this->RedisClusterEnabled(redis_client) == false) {
-        LOG(ERROR)
-            << "Now is cluster mode but try to connect Redis single node. "
-               "Please check redis_connection_mode in config file.";
+        // LOG(ERROR)
+        //     << "Now is cluster mode but try to connect Redis single node. "
+        //        "Please check redis_connection_mode in config file.";
         throw std::invalid_argument(
             "Can not connect to single node when in cluster mode, "
             "redis_connection_mode should be 1 when connect to single node.");
       }
       return redis_client;
     } catch (const std::exception &err) {
-      LOG(ERROR) << "RedisHandler--error: " << err.what();
+      // LOG(ERROR) << "RedisHandler--error: " << err.what();
       return nullptr;
     } catch (...) {
-      LOG(ERROR) << "RedisHandler--other crash";
+      // LOG(ERROR) << "RedisHandler--other crash";
       return nullptr;
     }
     return nullptr;
   }
 
-  virtual Status Conn() override {
-    assert(this->redis_connection_params.redis_host_ip.size() ==
-           this->redis_connection_params.redis_host_port.size());
+  TFRA_Status Conn() override {
+    assert(this->redis_connection_params_.redis_host_ip.size() ==
+           this->redis_connection_params_.redis_host_port.size());
     auto role_read = Role::MASTER;
-    if (this->redis_connection_params.redis_read_access_slave) {
+    if (this->redis_connection_params_.redis_read_access_slave) {
       role_read = Role::SLAVE;
     }
     if (this->isRedisConnect == false) {
-      for (size_t i = 0; i < this->redis_connection_params.redis_host_ip.size();
+      for (size_t i = 0; i < this->redis_connection_params_.redis_host_ip.size();
            ++i) {
         for (short j = 0; j < 10; j++) {
-          if (redis_conn_read == nullptr) {
-            redis_conn_read = StartConn(i, role_read);
+          if (redis_conn_read_ == nullptr) {
+            redis_conn_read_ = StartConn(i, role_read);
           }
-          if (redis_conn_write == nullptr) {
-            redis_conn_write = StartConn(i, Role::MASTER);
+          if (redis_conn_write_ == nullptr) {
+            redis_conn_write_ = StartConn(i, Role::MASTER);
           }
-          if (redis_conn_read != nullptr && redis_conn_write != nullptr) {
+          if (redis_conn_read_ != nullptr && redis_conn_write_ != nullptr) {
             this->isRedisConnect = true;
-            return Status::OK();
+            return TFRA_Status::OK();
           }
         }
-        LOG(WARNING) << "Can not access the host "
-                     << this->redis_connection_params.redis_host_ip[i]
-                     << ". Delete it from the host list.";
-        this->redis_connection_params.redis_host_ip.erase(
-            this->redis_connection_params.redis_host_ip.begin() + i);
-        this->redis_connection_params.redis_host_port.erase(
-            this->redis_connection_params.redis_host_port.begin() + i);
+        // LOG(WARNING) << "Can not access the host "
+        //              << this->redis_connection_params_.redis_host_ip[i]
+        //              << ". Delete it from the host list.";
+        this->redis_connection_params_.redis_host_ip.erase(
+            this->redis_connection_params_.redis_host_ip.begin() + i);
+        this->redis_connection_params_.redis_host_port.erase(
+            this->redis_connection_params_.redis_host_port.begin() + i);
       }
       if (this->isRedisConnect == false) {
-        LOG(ERROR) << "Can not connect to the Redis Cluster servers.";
-        if (redis_conn_read == nullptr && redis_conn_write != nullptr) {
-          return Status(error::UNAVAILABLE,
-                        "Can not access Redis Slave servers, Exit without any "
-                        "Redis connection.");
+        // LOG(ERROR) << "Can not connect to the Redis Cluster servers.";
+        if (redis_conn_read_ == nullptr && redis_conn_write_ != nullptr) {
+          return TFRA_Status(StatusCode::UNAVAILABLE,
+                        "Can not access Redis Slave servers, Exit without any Redis connection.");
         }
-        return Status(error::UNAVAILABLE, "Exit without any Redis connection.");
+        return TFRA_Status(StatusCode::UNAVAILABLE, "Exit without any Redis connection.");
       }
     }
-    return Status::OK();
+    return TFRA_Status::OK();
   }
 
   static std::shared_ptr<RedisWrapper<RedisInstance, K, V>> get_instance() {
@@ -169,11 +168,11 @@ class RedisWrapper<RedisInstance, K, V,
       ::sw::redis::StringView hkey((*bucket_context->ptrs)[1],
                                    (*bucket_context->sizes)[1]);
       try {
-        return redis_conn_read->command(cmd, hkey, bucket_context->ptrs.get(),
+        return redis_conn_read_->command(cmd, hkey, bucket_context->ptrs.get(),
                                         bucket_context->sizes.get());
       } catch (const std::exception &err) {
-        LOG(ERROR) << "RedisHandler error in PipeExecRead for slices "
-                   << hkey.data() << " -- " << err.what();
+        // LOG(ERROR) << "RedisHandler error in PipeExecRead for slices "
+        //            << hkey.data() << " -- " << err.what();
       }
     } else {
       return nullptr;
@@ -189,11 +188,11 @@ class RedisWrapper<RedisInstance, K, V,
       ::sw::redis::StringView hkey((*bucket_context->ptrs)[1],
                                    (*bucket_context->sizes)[1]);
       try {
-        return redis_conn_write->command(cmd, hkey, bucket_context->ptrs.get(),
+        return redis_conn_write_->command(cmd, hkey, bucket_context->ptrs.get(),
                                          bucket_context->sizes.get());
       } catch (const std::exception &err) {
-        LOG(ERROR) << "RedisHandler error in PipeExecWrite for slices "
-                   << hkey.data() << " -- " << err.what();
+        // LOG(ERROR) << "RedisHandler error in PipeExecWrite for slices "
+        //            << hkey.data() << " -- " << err.what();
       }
     } else {
       return nullptr;
@@ -202,7 +201,7 @@ class RedisWrapper<RedisInstance, K, V,
   }
 
  public:
-  virtual std::vector<std::string> GetKeyBucketsAndOptimizerParamsWithName(
+  std::vector<std::string> GetKeyBucketsAndOptimizerParamsWithName(
       const std::string &keys_prefix_name,
       const bool only_get_buckets) override {
     std::vector<std::string> keys_prefix_name_slices_in_redis;
@@ -215,12 +214,12 @@ class RedisWrapper<RedisInstance, K, V,
     ::sw::redis::StringView _hkey("0");
     std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter> reply;
     try {
-      reply = redis_conn_read->command(cmd, _hkey);
+      reply = redis_conn_read_->command(cmd, _hkey);
     } catch (const std::exception &err) {
-      LOG(ERROR)
-          << "RedisHandler error in "
-             "GetKeyBucketsAndOptimizerParamsWithName(CLUSTER SLOTS) --  "
-          << err.what();
+      // LOG(ERROR)
+      //     << "RedisHandler error in "
+      //        "GetKeyBucketsAndOptimizerParamsWithName(CLUSTER SLOTS) --  "
+      //     << err.what();
       return keys_prefix_name_slices_in_redis;
     }
 
@@ -243,17 +242,17 @@ class RedisWrapper<RedisInstance, K, V,
     long long cursor = 0;
     const redisReply *set_reply;
     keys_prefix_name_slices_in_redis.reserve(
-        this->redis_connection_params.storage_slice);
+        this->redis_connection_params_.storage_slice);
     for (size_t i = 0; i < ip_port_set.size(); ++i) {
       connection_options.host = ip_port_set[i].first;  // Required.
       connection_options.port =
           ip_port_set[i].second;  // Optional. The default port is 6379.
-      connection_options.user = this->redis_connection_params.redis_user;
+      connection_options.user = this->redis_connection_params_.redis_user;
       connection_options.password =
-          this->redis_connection_params
+          this->redis_connection_params_
               .redis_password;  // Optional. No redis_password by default.
       connection_options.db =
-          this->redis_connection_params
+          this->redis_connection_params_
               .redis_db;  // Optional. Use the 0th database by default.
       redis_client.reset(new Redis(connection_options));
       auto cmd_per_server = [](::sw::redis::Connection &connection,
@@ -272,10 +271,10 @@ class RedisWrapper<RedisInstance, K, V,
           reply_server =
               redis_client->command(cmd_per_server, redis_command.data());
         } catch (const std::exception &err) {
-          LOG(ERROR)
-              << "RedisHandler error "
-                 "GetKeyBucketsAndOptimizerParamsWithName(SCAN) in for IP "
-              << ip_port_set[i].first << " --  " << err.what();
+          // LOG(ERROR)
+          //     << "RedisHandler error "
+          //        "GetKeyBucketsAndOptimizerParamsWithName(SCAN) in for IP "
+          //     << ip_port_set[i].first << " --  " << err.what();
         }
         if (reply_server->element[0]->type == REDIS_REPLY_STRING) {
           // #define REDIS_REPLY_STRING 1
@@ -302,51 +301,51 @@ class RedisWrapper<RedisInstance, K, V,
     If there is no corresponding table in the Redis service, 0 is returned.
     Other exceptions return -1.
   */
-  virtual int CheckSlicesNum(const std::string &keys_prefix_name) override {
+  int CheckSlicesNum(const std::string &keys_prefix_name) override {
     std::vector<std::string> keys_prefix_name_slices_in_redis;
     try {
       keys_prefix_name_slices_in_redis = std::move(
           GetKeyBucketsAndOptimizerParamsWithName(keys_prefix_name, true));
     } catch (const std::exception &err) {
-      LOG(ERROR) << "RedisHandler error in CheckSlicesNum for SCAN "
-                 << keys_prefix_name << " -- " << err.what();
+      // LOG(ERROR) << "RedisHandler error in CheckSlicesNum for SCAN "
+      //            << keys_prefix_name << " -- " << err.what();
       return -1;
     }
 
     if (keys_prefix_name_slices_in_redis.size() == 0) {
-      LOG(INFO) << "There is not a corresponding table " << keys_prefix_name
-                << " existing in Redis cluster servers";
+      // LOG(INFO) << "There is not a corresponding table " << keys_prefix_name
+      //           << " existing in Redis cluster servers";
       return 0;
     } else if (keys_prefix_name_slices_in_redis.size() ==
-               this->redis_connection_params.storage_slice) {
-      LOG(INFO) << "There is already a corresponding table " << keys_prefix_name
-                << " existing in Redis cluster servers";
+               this->redis_connection_params_.storage_slice) {
+      // LOG(INFO) << "There is already a corresponding table " << keys_prefix_name
+      //           << " existing in Redis cluster servers";
       return 1;
     } else if (keys_prefix_name_slices_in_redis.size() <=
-               this->redis_connection_params.storage_slice) {
-      LOG(WARNING) << "storage_slice in this->redis_connection_params which is "
-                   << this->redis_connection_params.storage_slice
-                   << " is bigger than the slices number of this "
-                   << keys_prefix_name
-                   << " in the Redis Cluster servers which is "
-                   << keys_prefix_name_slices_in_redis.size();
+               this->redis_connection_params_.storage_slice) {
+      // LOG(WARNING) << "storage_slice in this->redis_connection_params_ which is "
+      //              << this->redis_connection_params_.storage_slice
+      //              << " is bigger than the slices number of this "
+      //              << keys_prefix_name
+      //              << " in the Redis Cluster servers which is "
+      //              << keys_prefix_name_slices_in_redis.size();
       return 2;
     } else {
-      LOG(ERROR) << "storage_slice in this->redis_connection_params which is "
-                 << this->redis_connection_params.storage_slice
-                 << " did not equal to the slices number of this "
-                 << keys_prefix_name
-                 << " in the Redis Cluster servers which is "
-                 << keys_prefix_name_slices_in_redis.size();
+      // LOG(ERROR) << "storage_slice in this->redis_connection_params_ which is "
+      //            << this->redis_connection_params_.storage_slice
+      //            << " did not equal to the slices number of this "
+      //            << keys_prefix_name
+      //            << " in the Redis Cluster servers which is "
+      //            << keys_prefix_name_slices_in_redis.size();
       return -1;
     }
     return -1;
   }
 
-  virtual std::vector<std::pair<unsigned, unsigned>> ClusterNodesSlots(
+  std::vector<std::pair<unsigned, unsigned>> ClusterNodesSlots(
       bool full_slots) override {
     std::vector<std::pair<unsigned, unsigned>> cluster_slots;
-    cluster_slots.reserve(this->redis_connection_params.storage_slice);
+    cluster_slots.reserve(this->redis_connection_params_.storage_slice);
     auto cmd = [](::sw::redis::Connection &connection,
                   ::sw::redis::StringView hkey) {
       connection.send("CLUSTER NODES");
@@ -354,16 +353,16 @@ class RedisWrapper<RedisInstance, K, V,
     ::sw::redis::StringView _hkey("0");
     std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter> reply;
     try {
-      reply = redis_conn_read->command(cmd, _hkey);
+      reply = redis_conn_read_->command(cmd, _hkey);
     } catch (const std::exception &err) {
-      LOG(ERROR) << "RedisHandler error in ClusterNodesSlots --  "
-                 << err.what();
+      // LOG(ERROR) << "RedisHandler error in ClusterNodesSlots --  "
+      //            << err.what();
       return cluster_slots;
     }
     if (reply->type == REDIS_REPLY_STRING) {
       std::vector<std::vector<::sw::redis::StringView>> csv_table;
       std::vector<::sw::redis::StringView> csv_table_row;
-      csv_table.reserve(this->redis_connection_params.storage_slice * 2);
+      csv_table.reserve(this->redis_connection_params_.storage_slice * 2);
       csv_table_row.reserve(10);
       const char *str_ptr = reply->str;
       const char *const str_ptr_begin = reply->str;
@@ -425,7 +424,7 @@ class RedisWrapper<RedisInstance, K, V,
     return cluster_slots;
   }
 
-  virtual size_t TableSizeInBucket(
+  size_t TableSizeInBucket(
       const std::string &keys_prefix_name_slice) override {
     const std::string command_string = "HLEN " + keys_prefix_name_slice;
     auto cmd = [](::sw::redis::Connection &connection,
@@ -433,11 +432,11 @@ class RedisWrapper<RedisInstance, K, V,
                   const char *str) { connection.send(str); };
     std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter> reply;
     try {
-      reply = redis_conn_read->command(cmd, keys_prefix_name_slice,
+      reply = redis_conn_read_->command(cmd, keys_prefix_name_slice,
                                        command_string.data());
     } catch (const std::exception &err) {
-      LOG(ERROR) << "RedisHandler error in TableSizeInBucket for slices "
-                 << keys_prefix_name_slice << " -- " << err.what();
+      // LOG(ERROR) << "RedisHandler error in TableSizeInBucket for slices "
+      //            << keys_prefix_name_slice << " -- " << err.what();
       throw(err);
     }
     size_t size = 0;
@@ -448,7 +447,7 @@ class RedisWrapper<RedisInstance, K, V,
     return size;
   }
 
-  virtual Status RemoveHkeysInBuckets(
+  TFRA_Status RemoveHkeysInBuckets(
       const std::string &keys_prefix_name_slice) override {
     // std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter> reply;
     std::string redis_command("DEL ");
@@ -457,18 +456,18 @@ class RedisWrapper<RedisInstance, K, V,
                   ::sw::redis::StringView hkey,
                   const char *str) { connection.send(str); };
     try {
-      /*reply=*/redis_conn_write->command(cmd, keys_prefix_name_slice,
+      /*reply=*/redis_conn_write_->command(cmd, keys_prefix_name_slice,
                                           command_string.data());
     } catch (const std::exception &err) {
-      LOG(ERROR) << "RedisHandler error in RemoveHkeysInBuckets for slices "
-                 << keys_prefix_name_slice << " -- " << err.what();
-      return errors::Unknown(err.what());
+      // LOG(ERROR) << "RedisHandler error in RemoveHkeysInBuckets for slices "
+      //            << keys_prefix_name_slice << " -- " << err.what();
+      return TFRA_Status(StatusCode::UNKNOWN, err.what());
     }
 
-    return Status::OK();
+    return TFRA_Status::OK();
   }
 
-  virtual std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter>
+  std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter>
   HscanGetKeysValsInBucket(const std::string &keys_prefix_name_slice,
                            long long *cursor, const long long count) override {
     std::string command_string = "HSCAN " + keys_prefix_name_slice + ' ' +
@@ -479,11 +478,11 @@ class RedisWrapper<RedisInstance, K, V,
                   const char *str) { connection.send(str); };
     std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter> reply;
     try {
-      reply = redis_conn_read->command(cmd, keys_prefix_name_slice,
+      reply = redis_conn_read_->command(cmd, keys_prefix_name_slice,
                                        command_string.data());
     } catch (const std::exception &err) {
-      LOG(ERROR) << "RedisHandler error in HscanGetKeysValsInBucket for slices "
-                 << keys_prefix_name_slice << " -- " << err.what();
+      // LOG(ERROR) << "RedisHandler error in HscanGetKeysValsInBucket for slices "
+      //            << keys_prefix_name_slice << " -- " << err.what();
     }
     if (reply->element[0]->type == REDIS_REPLY_STRING) {
       // #define REDIS_REPLY_STRING 1
@@ -494,7 +493,7 @@ class RedisWrapper<RedisInstance, K, V,
     return reply;
   }
 
-  virtual std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter> MgetInBucket(
+  std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter> MgetInBucket(
       const K *keys, const int64_t begin, const int64_t max_i,
       const std::string &keys_prefix_name_slice) override {
     std::unique_ptr<BucketContext> bucket_context_temp(new BucketContext());
@@ -538,9 +537,9 @@ class RedisWrapper<RedisInstance, K, V,
     }
   }
 
-  virtual Status SetExpireBuckets(
+  TFRA_Status SetExpireBuckets(
       const std::string &keys_prefix_name) override {
-    if (this->redis_connection_params.expire_model_tag_in_seconds >= 0) {
+    if (this->redis_connection_params_.expire_model_tag_in_seconds >= 0) {
       // std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter> reply;
       const std::string expire_command("EXPIRE ");
       std::string redis_command;
@@ -554,22 +553,22 @@ class RedisWrapper<RedisInstance, K, V,
         redis_command =
             expire_command + bucket_name + ' ' +
             std::to_string(
-                this->redis_connection_params.expire_model_tag_in_seconds);
+                this->redis_connection_params_.expire_model_tag_in_seconds);
         try {
-          /*reply=*/redis_conn_write->command(cmd, bucket_name,
+          /*reply=*/redis_conn_write_->command(cmd, bucket_name,
                                               redis_command.data());
         } catch (const std::exception &err) {
-          LOG(ERROR) << "RedisHandler error in SetExpireBuckets for "
-                     << bucket_name << " -- " << err.what();
-          return errors::Unknown(err.what());
+          // LOG(ERROR) << "RedisHandler error in SetExpireBuckets for "
+          //            << bucket_name << " -- " << err.what();
+          // return errors::Unknown(err.what());
+          return TFRA_Status(StatusCode::UNKNOWN, err.what());
         }
       }
     }
-    return Status::OK();
+    return TFRA_Status::OK();
   }
 
-  virtual Status SetPersistBuckets(
-      const std::string &keys_prefix_name) override {
+  TFRA_Status SetPersistBuckets(const std::string &keys_prefix_name) override {
     // std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter> reply;
     const std::string expire_command("PERSIST ");
     std::string redis_command;
@@ -582,27 +581,27 @@ class RedisWrapper<RedisInstance, K, V,
       redis_command.clear();
       redis_command = expire_command + bucket_name;
       try {
-        /*reply=*/redis_conn_write->command(cmd, bucket_name,
+        /*reply=*/redis_conn_write_->command(cmd, bucket_name,
                                             redis_command.data());
       } catch (const std::exception &err) {
-        LOG(ERROR) << "RedisHandler error in SetPersistBuckets for "
-                   << bucket_name << " -- " << err.what();
-        return errors::Unknown(err.what());
+        // LOG(ERROR) << "RedisHandler error in SetPersistBuckets for "
+        //            << bucket_name << " -- " << err.what();
+        // return errors::Unknown(err.what());
+        return TFRA_Status(StatusCode::UNKNOWN, err.what());
       }
     }
 
-    return Status::OK();
+    return TFRA_Status::OK();
   }
 
   /*
   fds are the return of POSIX open file function declared in <fcntl.h>
   */
-  virtual Status DumpToDisk(
+  TFRA_Status DumpToDisk(
       const std::vector<std::string> &keys_prefix_name_slices,
       std::vector<aiocb> &wrs, const std::vector<int> &fds) override {
     if (fds.size() == 0) {
-      return Status::OK();
-      ;
+      return TFRA_Status::OK();
     }
 
     std::string redis_command;
@@ -616,16 +615,17 @@ class RedisWrapper<RedisInstance, K, V,
 
     size_t buf_len;
     volatile void *tem_aio_buf;
-    for (unsigned i = 0; i < this->redis_connection_params.storage_slice; ++i) {
+    for (unsigned i = 0; i < this->redis_connection_params_.storage_slice; ++i) {
       redis_command = "DUMP " + keys_prefix_name_slices[i];
       reply.reset();
       try {
-        reply = redis_conn_read->command(cmd, keys_prefix_name_slices[i],
+        reply = redis_conn_read_->command(cmd, keys_prefix_name_slices[i],
                                          redis_command.data());
       } catch (const std::exception &err) {
-        LOG(ERROR) << "RedisHandler error in DumpToDisk for slices "
-                   << keys_prefix_name_slices[i] << " -- " << err.what();
-        return errors::Unknown(err.what());
+        // LOG(ERROR) << "RedisHandler error in DumpToDisk for slices "
+        //            << keys_prefix_name_slices[i] << " -- " << err.what();
+        // return errors::Unknown(err.what());
+        return TFRA_Status(StatusCode::UNKNOWN, err.what());
       }
 
       wr = &wrs[i];
@@ -637,9 +637,9 @@ class RedisWrapper<RedisInstance, K, V,
           if ((ret = aio_return(wr)) > 0) {
             break;
           } else {
-            LOG(WARNING) << "File handle " << wr->aio_fildes
-                         << " did not finish writing last round. "
-                         << "Try to write " << i << " more times";
+            // LOG(WARNING) << "File handle " << wr->aio_fildes
+            //              << " did not finish writing last round. "
+            //              << "Try to write " << i << " more times";
             ret = aio_write(wr);
             if (ret < 0) perror("aio_write");
           }
@@ -659,20 +659,20 @@ class RedisWrapper<RedisInstance, K, V,
         ret = aio_write(wr);
         if (ret < 0) perror("aio_write");
       } else {
-        LOG(ERROR) << "HKEY " << keys_prefix_name_slices[i]
-                   << " does not exist in the Redis server. ";
+        // LOG(ERROR) << "HKEY " << keys_prefix_name_slices[i]
+        //            << " does not exist in the Redis server. ";
       }
     }
 
-    return Status::OK();
+    return TFRA_Status::OK();
   }
 
-  virtual Status RestoreFromDisk(
+  TFRA_Status RestoreFromDisk(
       const std::vector<std::string> &keys_prefix_name_slices,
       std::vector<aiocb> &rds, const std::vector<int> &fds,
       const std::vector<unsigned long> &buf_sizes) override {
     if (fds.size() == 0) {
-      Status::OK();
+      TFRA_Status::OK();
     }
 
     // std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter> reply;
@@ -751,19 +751,20 @@ class RedisWrapper<RedisInstance, K, V,
             if (aio_error(rd) != EINPROGRESS) {
               if ((ret = aio_return(rd)) > 0) {
                 try {
-                  /*reply = */ redis_conn_write->command(
+                  /*reply = */ redis_conn_write_->command(
                       cmd, keys_prefix_name_slices[i], ptrs_i_i[i],
                       sizes_i_i[i]);
                 } catch (const std::exception &err) {
-                  LOG(ERROR)
-                      << "RedisHandler error in RestoreFromDisk for slices "
-                      << keys_prefix_name_slices[i] << " -- " << err.what();
+                  // LOG(ERROR)
+                  //     << "RedisHandler error in RestoreFromDisk for slices "
+                  //     << keys_prefix_name_slices[i] << " -- " << err.what();
                   if (rd->aio_buf) {
                     free((void *)rd->aio_buf);
                     rd->aio_buf = nullptr;
                     rd->aio_nbytes = 0;
                   }
-                  return errors::Unknown(err.what());
+                  // return errors::Unknown(err.what());
+                  return TFRA_Status(StatusCode::UNKNOWN, err.what());
                 }
                 if (rd->aio_buf) {
                   free((void *)rd->aio_buf);
@@ -772,19 +773,19 @@ class RedisWrapper<RedisInstance, K, V,
                 }
                 --count_down;
               } else {
-                LOG(WARNING) << "File handle " << rd->aio_fildes
-                             << " did not finish reading last round. "
-                             << "Try to read " << reread_countdown[i] - 1
-                             << " more times";
+                // LOG(WARNING) << "File handle " << rd->aio_fildes
+                //              << " did not finish reading last round. "
+                //              << "Try to read " << reread_countdown[i] - 1
+                //              << " more times";
                 ret = aio_read(rd);
                 if (ret < 0) perror("aio_read");
                 --reread_countdown[i];
               }
             }
           } else {
-            LOG(WARNING) << "File handle " << rd->aio_fildes << " for slice "
-                         << keys_prefix_name_slices[i]
-                         << " has nbytes 0. Ignore.";
+            // LOG(WARNING) << "File handle " << rd->aio_fildes << " for slice "
+            //              << keys_prefix_name_slices[i]
+            //              << " has nbytes 0. Ignore.";
             reread_countdown[i] = 0;
             --count_down;
             if (rd->aio_buf) {
@@ -794,9 +795,9 @@ class RedisWrapper<RedisInstance, K, V,
             }
           }
         } else if (reread_countdown[i] == 1) {
-          LOG(ERROR) << "File handle " << rd->aio_fildes << " for slice "
-                     << keys_prefix_name_slices[i]
-                     << " has some troubles! Given up.";
+          // LOG(ERROR) << "File handle " << rd->aio_fildes << " for slice "
+          //            << keys_prefix_name_slices[i]
+          //            << " has some troubles! Given up.";
           --reread_countdown[i];
           --count_down;
           if (rd->aio_buf) {
@@ -810,8 +811,8 @@ class RedisWrapper<RedisInstance, K, V,
     }
 
     return no_errors
-               ? Status::OK()
-               : errors::Unknown("Unknown errors happen in file handles.");
+               ? TFRA_Status::OK()
+               : TFRA_Status(StatusCode::UNKNOWN, "Unknown errors happen in file handles.");
   }
 
   void DoDuplicateInRedis(const std::string &keys_prefix_name_slice_old,
@@ -843,18 +844,18 @@ class RedisWrapper<RedisInstance, K, V,
     const static char *redis_restore_command_param = "0";
     const static std::size_t &&redis_restore_command_byte_param = 1;
 
-    LOG(INFO) << "Now try to duplicate the KV pair from "
-              << keys_prefix_name_slice_old << " to "
-              << keys_prefix_name_slice_new;
+    // LOG(INFO) << "Now try to duplicate the KV pair from "
+    //           << keys_prefix_name_slice_old << " to "
+    //           << keys_prefix_name_slice_new;
 
     try {
-      reply = redis_conn_read->command(cmd_dump, keys_prefix_name_slice_old,
+      reply = redis_conn_read_->command(cmd_dump, keys_prefix_name_slice_old,
                                        redis_dump_command.data());
     } catch (const std::exception &err) {
-      LOG(ERROR) << "RedisHandler error in dump_to_reply of DoDuplicateInRedis "
-                    "for slices "
-                 << keys_prefix_name_slice_old << " -- " << err.what();
-      error_ptr = std::current_exception();
+      // LOG(ERROR) << "RedisHandler error in dump_to_reply of DoDuplicateInRedis "
+      //               "for slices "
+      //            << keys_prefix_name_slice_old << " -- " << err.what();
+      error_ptr_ = std::current_exception();
       throw(err);
     }
 
@@ -869,41 +870,41 @@ class RedisWrapper<RedisInstance, K, V,
       sizes_0.emplace_back(redis_restore_command_byte_param);
       sizes_0.emplace_back(reply->len);
     } else {
-      LOG(ERROR) << "HKEY " << keys_prefix_name_slice_new
-                 << " does not exist in the Redis server. ";
+      // LOG(ERROR) << "HKEY " << keys_prefix_name_slice_new
+      //            << " does not exist in the Redis server. ";
     }
     try {
-      /*reply = */ redis_conn_write->command(
+      /*reply = */ redis_conn_write_->command(
           cmd_restore, keys_prefix_name_slice_new, ptrs_0, sizes_0);
     } catch (const std::exception &err) {
-      LOG(ERROR) << "RedisHandler error in restore_from_reply of "
-                    "DoDuplicateInRedis for slices "
-                 << keys_prefix_name_slice_new << " -- " << err.what();
-      error_ptr = std::current_exception();
+      // LOG(ERROR) << "RedisHandler error in restore_from_reply of "
+      //               "DoDuplicateInRedis for slices "
+      //            << keys_prefix_name_slice_new << " -- " << err.what();
+      error_ptr_ = std::current_exception();
       throw(err);
     }
   }
 
-  virtual Status DuplicateInRedis(
+  TFRA_Status DuplicateInRedis(
       const std::vector<std::string> &keys_prefix_name_slices_old,
       const std::vector<std::string> &keys_prefix_name_slices_new) override {
     try {
-      for (unsigned i = 0; i < this->redis_connection_params.storage_slice;
+      for (unsigned i = 0; i < this->redis_connection_params_.storage_slice;
            ++i) {
-        network_worker_pool->enqueue([this, &keys_prefix_name_slices_old,
+        network_worker_pool_ptr_->enqueue([this, &keys_prefix_name_slices_old,
                                       &keys_prefix_name_slices_new, i] {
           DoDuplicateInRedis(keys_prefix_name_slices_old[i],
                              keys_prefix_name_slices_new[i]);
         });
       }
-      if (error_ptr) {
-        std::rethrow_exception(error_ptr);
+      if (error_ptr_) {
+        std::rethrow_exception(error_ptr_);
       }
     } catch (const std::exception &err) {
-      error_ptr = nullptr;
-      return errors::Unknown(err.what());
+      error_ptr_ = nullptr;
+      return TFRA_Status(StatusCode::UNKNOWN, err.what());
     }
-    return Status::OK();
+    return TFRA_Status::OK();
   }
 
  public:
@@ -933,8 +934,7 @@ every bucket has its own BucketContext for sending data---for locating reply-
 
   PS: vector bucket_locs is only allocated in Redis Cluster mode!
   */
-  virtual std::vector<std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter>>
-  MgetCommand(
+  std::vector<std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter>> MgetCommand(
       const K *keys, ThreadContext *thread_context, const int64_t begin,
       const int64_t max_i,
       const std::vector<std::string> &keys_prefix_name_slices) override {
@@ -947,10 +947,10 @@ every bucket has its own BucketContext for sending data---for locating reply-
     const K *const pk_raw_end = keys + max_i;
     const K *pk_raw = keys + begin;
 
-    const unsigned &storage_slice = this->redis_connection_params.storage_slice;
+    const unsigned &storage_slice = this->redis_connection_params_.storage_slice;
     const unsigned &&vector_len =
         (static_cast<int64_t>(reinterpret_cast<int>(argc)) /
-         this->redis_connection_params.storage_slice) +
+         this->redis_connection_params_.storage_slice) +
         2;
 
     thread_context->HandleReserve(storage_slice, vector_len, total);
@@ -965,7 +965,7 @@ every bucket has its own BucketContext for sending data---for locating reply-
     unsigned key_bucket_locs = 0;
     for (; pk_raw != pk_raw_end; ++pk_raw) {
       key_bucket_locs =
-          KBucketNum<K>(this->K_bucket_num_handle, pk_raw, storage_slice);
+          KBucketNum<K>(this->K_bucket_num_handle_, pk_raw, storage_slice);
       // The bucket to which the key belongs is recorded to facilitate future
       // memory writes that do not recompute the redis hash
       *pbucket_loc = key_bucket_locs;
@@ -1000,7 +1000,7 @@ every bucket has its own BucketContext for sending data---for locating reply-
     try {
       for (unsigned i = 0; i < storage_slice; ++i) {
         results.emplace_back(
-            network_worker_pool->enqueue([this, &cmd, thread_context, i] {
+            network_worker_pool_ptr_->enqueue([this, &cmd, thread_context, i] {
               return PipeExecRead(cmd, 3U, thread_context->buckets[i]);
             }));
       }
@@ -1028,20 +1028,17 @@ every bucket has its own BucketContext for sending data---for locating reply-
     }
   }
 
-  virtual Status MgetToTensor(
-      V *values, const V *default_value, const bool is_full_default,
-      ThreadContext *thread_context,
-      std::vector<std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter>>
-          &reply,
-      const int64_t begin, const int64_t max_i,
-      const int64_t Velems_per_dim0) override {
+  TFRA_Status MgetToTensor(V *values, const V *default_value, const bool is_full_default,
+            ThreadContext *thread_context,
+            std::vector<std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter>> &reply,
+            const int64_t begin, const int64_t max_i,const int64_t Velems_per_dim0) override {
     const V *pv_raw = values + begin * Velems_per_dim0;
     const V *dft_raw = default_value + begin * Velems_per_dim0;
     const V *const dft_raw_begin = default_value;
 
     const std::vector<unsigned> *bucket_locs =
         thread_context->bucket_locs.get();
-    const unsigned &storage_slice = this->redis_connection_params.storage_slice;
+    const unsigned &storage_slice = this->redis_connection_params_.storage_slice;
     unsigned buckets_iters_nums[storage_slice];
     unsigned bucket_loc;
     memset(buckets_iters_nums, 0U, sizeof(buckets_iters_nums));
@@ -1069,9 +1066,9 @@ every bucket has its own BucketContext for sending data---for locating reply-
         }
       } else {
         if (!print_once[bucket_loc]) {
-          LOG(WARNING) << "Redis reply in bucket_loc " << bucket_loc
-                       << " from MgetCommend has some problems with error "
-                       << ", using default values to repalce.";
+          // LOG(WARNING) << "Redis reply in bucket_loc " << bucket_loc
+          //              << " from MgetCommend has some problems with error "
+          //              << ", using default values to repalce.";
           print_once[bucket_loc] = true;
         }
         ++(buckets_iters_nums[bucket_loc]);
@@ -1080,10 +1077,10 @@ every bucket has its own BucketContext for sending data---for locating reply-
       }
     }
 
-    return Status::OK();
+    return TFRA_Status::OK();
   }
 
-  virtual Status MgetToTensorWithExist(
+  TFRA_Status MgetToTensorWithExist(
       V *values, const V *default_value, bool *exists,
       const bool is_full_default, ThreadContext *thread_context,
       std::vector<std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter>>
@@ -1096,7 +1093,7 @@ every bucket has its own BucketContext for sending data---for locating reply-
 
     const std::vector<unsigned> *bucket_locs =
         thread_context->bucket_locs.get();
-    const unsigned &storage_slice = this->redis_connection_params.storage_slice;
+    const unsigned &storage_slice = this->redis_connection_params_.storage_slice;
     unsigned buckets_iters_nums[storage_slice];
     unsigned bucket_loc;
     memset(buckets_iters_nums, 0U, sizeof(buckets_iters_nums));
@@ -1126,9 +1123,9 @@ every bucket has its own BucketContext for sending data---for locating reply-
         }
       } else {
         if (!print_once[bucket_loc]) {
-          LOG(WARNING) << "Redis reply in bucket_loc " << bucket_loc
-                       << " from MgetCommend has some problems with error "
-                       << ", using default values to repalce.";
+          // LOG(WARNING) << "Redis reply in bucket_loc " << bucket_loc
+          //              << " from MgetCommend has some problems with error "
+          //              << ", using default values to repalce.";
           print_once[bucket_loc] = true;
         }
         ++(buckets_iters_nums[bucket_loc]);
@@ -1138,10 +1135,10 @@ every bucket has its own BucketContext for sending data---for locating reply-
       }
     }
 
-    return Status::OK();
+    return TFRA_Status::OK();
   }
 
-  virtual Status MsetCommand(
+  TFRA_Status MsetCommand(
       const K *keys, const V *values, ThreadContext *thread_context,
       const int64_t begin, const int64_t max_i, const int64_t Velems_per_dim0,
       const std::vector<std::string> &keys_prefix_name_slices) override {
@@ -1158,10 +1155,10 @@ every bucket has its own BucketContext for sending data---for locating reply-
 
     const V *pv_raw = values + begin * Velems_per_dim0;
 
-    const unsigned &storage_slice = this->redis_connection_params.storage_slice;
+    const unsigned &storage_slice = this->redis_connection_params_.storage_slice;
     const unsigned &&vector_len =
         (static_cast<int64_t>(reinterpret_cast<int>(argc)) /
-         this->redis_connection_params.storage_slice) +
+         this->redis_connection_params_.storage_slice) +
         2;
 
     thread_context->HandleReserve(storage_slice, vector_len, total);
@@ -1181,7 +1178,7 @@ every bucket has its own BucketContext for sending data---for locating reply-
       VCATS_temp = VContentAndTypeSize<V>(VCATS_temp, Velems_per_dim0,
                                           V_byte_size, pv_raw, buff_temp[i]);
       key_bucket_locs =
-          KBucketNum<K>(this->K_bucket_num_handle, pk_raw,
+          KBucketNum<K>(this->K_bucket_num_handle_, pk_raw,
                         storage_slice);  // TODO: change it to AVX512
 
       // Direct access to Tensor data in TensorFlow
@@ -1210,25 +1207,26 @@ every bucket has its own BucketContext for sending data---for locating reply-
     try {
       for (unsigned i = 0; i < storage_slice; ++i) {
         results.emplace_back(
-            network_worker_pool->enqueue([this, &cmd, thread_context, i] {
+            network_worker_pool_ptr_->enqueue([this, &cmd, thread_context, i] {
               return PipeExecWrite(cmd, 4U, thread_context->buckets[i]);
             }));
       }
       for (auto &&result : results) {
         result.wait();
       }
-      if (error_ptr) {
-        std::rethrow_exception(error_ptr);
+      if (error_ptr_) {
+        std::rethrow_exception(error_ptr_);
       }
     } catch (const std::exception &err) {
-      error_ptr = nullptr;
-      return errors::Unknown(err.what());
+      error_ptr_ = nullptr;
+      return TFRA_Status(StatusCode::UNKNOWN, err.what());
+      // return errors::Unknown(err.what());
     }
 
-    return Status::OK();
+    return TFRA_Status::OK();
   }
 
-  virtual Status MaccumCommand(
+  TFRA_Status MaccumCommand(
       const K *keys, const V *values_or_delta, const bool *exists,
       ThreadContext *thread_context, const int64_t begin, const int64_t max_i,
       const int64_t Velems_per_dim0, std::string &values_dtype_str,
@@ -1247,10 +1245,10 @@ every bucket has its own BucketContext for sending data---for locating reply-
 
     const V *pv_raw = values_or_delta + begin * Velems_per_dim0;
 
-    const unsigned &storage_slice = this->redis_connection_params.storage_slice;
+    const unsigned &storage_slice = this->redis_connection_params_.storage_slice;
     const unsigned &&vector_len =
         (static_cast<int64_t>(reinterpret_cast<int>(argc)) /
-         this->redis_connection_params.storage_slice) +
+         this->redis_connection_params_.storage_slice) +
         4;
 
     thread_context->HandleReserve(storage_slice, vector_len, total);
@@ -1272,7 +1270,7 @@ every bucket has its own BucketContext for sending data---for locating reply-
       VCATS_temp = VContentAndTypeSize<V>(VCATS_temp, Velems_per_dim0,
                                           V_byte_size, pv_raw, buff_temp[i]);
       key_bucket_locs =
-          KBucketNum<K>(this->K_bucket_num_handle, pk_raw,
+          KBucketNum<K>(this->K_bucket_num_handle_, pk_raw,
                         storage_slice);  // TODO: change it to AVX512
 
       // Direct access to Tensor data in TensorFlow
@@ -1307,25 +1305,26 @@ every bucket has its own BucketContext for sending data---for locating reply-
     try {
       for (unsigned i = 0; i < storage_slice; ++i) {
         results.emplace_back(
-            network_worker_pool->enqueue([this, &cmd, thread_context, i] {
+            network_worker_pool_ptr_->enqueue([this, &cmd, thread_context, i] {
               return PipeExecWrite(cmd, 6U, thread_context->buckets[i]);
             }));
       }
       for (auto &&result : results) {
         result.wait();
       }
-      if (error_ptr) {
-        std::rethrow_exception(error_ptr);
+      if (error_ptr_) {
+        std::rethrow_exception(error_ptr_);
       }
     } catch (const std::exception &err) {
-      error_ptr = nullptr;
-      return errors::Unknown(err.what());
+      error_ptr_ = nullptr;
+      // return errors::Unknown(err.what());
+      return TFRA_Status(StatusCode::UNKNOWN, err.what());
     }
 
-    return Status::OK();
+    return TFRA_Status::OK();
   }
 
-  virtual Status DelCommand(
+  TFRA_Status DelCommand(
       const K *keys, ThreadContext *thread_context, const int64_t begin,
       const int64_t max_i,
       const std::vector<std::string> &keys_prefix_name_slices) override {
@@ -1338,10 +1337,10 @@ every bucket has its own BucketContext for sending data---for locating reply-
     const K *const pk_raw_end = keys + max_i;
     const K *pk_raw = keys + begin;
 
-    const unsigned &storage_slice = this->redis_connection_params.storage_slice;
+    const unsigned &storage_slice = this->redis_connection_params_.storage_slice;
     const unsigned &&vector_len =
         (static_cast<int64_t>(reinterpret_cast<int>(argc)) /
-         this->redis_connection_params.storage_slice) +
+         this->redis_connection_params_.storage_slice) +
         2;
 
     thread_context->HandleReserve(storage_slice, vector_len, total);
@@ -1356,7 +1355,7 @@ every bucket has its own BucketContext for sending data---for locating reply-
     unsigned key_bucket_locs = 0;
     for (; pk_raw != pk_raw_end; ++pk_raw) {
       key_bucket_locs =
-          KBucketNum<K>(this->K_bucket_num_handle, pk_raw, storage_slice);
+          KBucketNum<K>(this->K_bucket_num_handle_, pk_raw, storage_slice);
       // The bucket to which the key belongs is recorded to facilitate future
       // memory writes that do not recompute the redis hash
       *pbucket_loc = key_bucket_locs;
@@ -1386,24 +1385,25 @@ every bucket has its own BucketContext for sending data---for locating reply-
     try {
       for (unsigned i = 0; i < storage_slice; ++i) {
         results.emplace_back(
-            network_worker_pool->enqueue([this, &cmd, thread_context, i] {
+            network_worker_pool_ptr_->enqueue([this, &cmd, thread_context, i] {
               return PipeExecWrite(cmd, 3U, thread_context->buckets[i]);
             }));
       }
       for (auto &&result : results) {
         result.wait();
       }
-      if (error_ptr) {
-        std::rethrow_exception(error_ptr);
+      if (error_ptr_) {
+        std::rethrow_exception(error_ptr_);
       }
     } catch (const std::exception &err) {
-      error_ptr = nullptr;
-      return errors::Unknown(err.what());
+      error_ptr_ = nullptr;
+      return TFRA_Status(StatusCode::UNKNOWN, err.what());
+      // return errors::Unknown(err.what());
     }
 
-    return Status::OK();
+    return TFRA_Status::OK();
   }
-};  // namespace redis_connection
+};  // class RedisWrapper
 }  // namespace redis_connection
 }  // namespace recommenders_addons
 }  // namespace tensorflow

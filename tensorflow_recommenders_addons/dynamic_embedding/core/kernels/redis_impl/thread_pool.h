@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <thread>
 #include <vector>
+#include <atomic>
 
 namespace tensorflow {
 namespace recommenders_addons {
@@ -24,32 +25,30 @@ class ThreadPool {
 
  private:
   // need to keep track of threads so we can join them
-  std::vector<std::thread> workers;
+  std::vector<std::thread> workers_;
   // the task queue
-  std::queue<std::function<void()> > tasks;
+  std::queue<std::function<void()> > tasks_;
 
   // synchronization
-  std::mutex queue_mutex;
-  std::condition_variable condition;
-  bool stop;
+  std::mutex queue_mutex_;
+  std::condition_variable condition_;
+  std::atomic_bool stop_;
 };
 
-// the constructor just launches some amount of workers
-inline ThreadPool::ThreadPool(size_t threads) : stop(false) {
+// the constructor just launches some amount of workers_
+inline ThreadPool::ThreadPool(size_t threads) : stop_(false) {
   for (size_t i = 0; i < threads; ++i)
-    workers.emplace_back([this] {
+    workers_.emplace_back([this] {
       for (;;) {
         std::function<void()> task;
-
         {
-          std::unique_lock<std::mutex> lock(this->queue_mutex);
-          this->condition.wait(
-              lock, [this] { return this->stop || !this->tasks.empty(); });
-          if (this->stop && this->tasks.empty()) return;
-          task = std::move(this->tasks.front());
-          this->tasks.pop();
+          std::unique_lock<std::mutex> lock(this->queue_mutex_);
+          this->condition_.wait(
+              lock, [this] { return this->stop_.load() || !this->tasks_.empty(); });
+          if (this->stop_.load() && this->tasks_.empty()) return;
+          task = std::move(this->tasks_.front());
+          this->tasks_.pop();
         }
-
         task();
       }
     });
@@ -65,26 +64,22 @@ auto ThreadPool::enqueue(F&& f, Args&&... args)
       std::bind(std::forward<F>(f), std::forward<Args>(args)...));
 
   std::future<return_type> res = task->get_future();
+  // don't allow enqueueing after stopping the pool
+  if (stop_.load()) throw std::runtime_error("enqueue on stopped ThreadPool");
   {
-    std::unique_lock<std::mutex> lock(queue_mutex);
+    std::unique_lock<std::mutex> lock(queue_mutex_);
 
-    // don't allow enqueueing after stopping the pool
-    if (stop) throw std::runtime_error("enqueue on stopped ThreadPool");
-
-    tasks.emplace([task]() { (*task)(); });
+    tasks_.emplace([task]() { (*task)(); });
   }
-  condition.notify_one();
+  condition_.notify_one();
   return res;
 }
 
 // the destructor joins all threads
 inline ThreadPool::~ThreadPool() {
-  {
-    std::unique_lock<std::mutex> lock(queue_mutex);
-    stop = true;
-  }
-  condition.notify_all();
-  for (std::thread& worker : workers) worker.join();
+  stop_.store(true);
+  condition_.notify_all();
+  for (std::thread& worker : workers_) worker.join();
 }
 }  // namespace redis_connection
 }  // namespace recommenders_addons

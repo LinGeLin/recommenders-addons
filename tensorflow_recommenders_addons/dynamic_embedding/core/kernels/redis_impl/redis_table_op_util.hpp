@@ -60,7 +60,7 @@ size_t SelectAvailableThreadContext(
 }
 
 template <typename K, typename V>
-Status launchFindCore(std::shared_ptr<RedisBaseWrapper<K, V>> _table_instance,
+TFRA_Status launchFindCore(std::shared_ptr<RedisBaseWrapper<K, V>> _table_instance,
                       std::vector<std::string> &keys_prefix_name_slices,
                       const K *keys, V *values, const V *default_value,
                       const bool is_full_default,
@@ -75,7 +75,7 @@ Status launchFindCore(std::shared_ptr<RedisBaseWrapper<K, V>> _table_instance,
       _table_instance->MgetCommand(keys, threads_Find.at(thread_context_id),
                                    begin, end, keys_prefix_name_slices);
 
-  auto statu =
+  auto status =
       _table_instance->MgetToTensor(values, default_value, is_full_default,
                                     threads_Find.at(thread_context_id), reply,
                                     begin, end, Velems_per_flat2_dim0);
@@ -83,11 +83,11 @@ Status launchFindCore(std::shared_ptr<RedisBaseWrapper<K, V>> _table_instance,
   threads_Find[thread_context_id]->thread_occupied.store(
       false, std::memory_order_release);
 
-  return statu;
+  return status;
 }
 
 template <typename K, typename V>
-Status launchFindWithExistsCore(
+TFRA_Status launchFindWithExistsCore(
     std::shared_ptr<RedisBaseWrapper<K, V>> _table_instance,
     std::vector<std::string> &keys_prefix_name_slices, const K *keys, V *values,
     const V *default_value, bool *exists, const bool is_full_default,
@@ -103,7 +103,7 @@ Status launchFindWithExistsCore(
       _table_instance->MgetCommand(keys, threads_Find.at(thread_context_id),
                                    begin, end, keys_prefix_name_slices);
 
-  auto statu = _table_instance->MgetToTensorWithExist(
+  auto status = _table_instance->MgetToTensorWithExist(
       values, default_value, exists, is_full_default,
       threads_Find.at(thread_context_id), reply, begin, end,
       Velems_per_flat2_dim0);
@@ -111,35 +111,35 @@ Status launchFindWithExistsCore(
   threads_Find[thread_context_id]->thread_occupied.store(
       false, std::memory_order_release);
 
-  return statu;
+  return status;
 }
 
 template <typename K, typename V>
-Status launchInsertCore(std::shared_ptr<RedisBaseWrapper<K, V>> _table_instance,
+TFRA_Status launchInsertCore(std::shared_ptr<RedisBaseWrapper<K, V>> _table_instance,
                         std::vector<std::string> &keys_prefix_name_slices,
                         const K *keys, const V *values,
-                        const int64_t &Velems_per_flat2_dim0,
+                        const int64_t &value_dim,
                         std::vector<ThreadContext *> &threads_Insert,
                         std::mutex &threads_Insert_mutex, const int64_t begin,
                         const int64_t end) {
   size_t thread_context_id =
       SelectAvailableThreadContext(threads_Insert, threads_Insert_mutex);
 
-  auto statu = _table_instance->MsetCommand(
+  auto status = _table_instance->MsetCommand(
       keys, values, threads_Insert.at(thread_context_id), begin, end,
-      Velems_per_flat2_dim0, keys_prefix_name_slices);
+      value_dim, keys_prefix_name_slices);
 
   threads_Insert[thread_context_id]->thread_occupied.store(
       false, std::memory_order_release);
 
-  return statu;
+  return status;
 }
 
 template <typename K, typename V>
-Status launchAccumCore(std::shared_ptr<RedisBaseWrapper<K, V>> _table_instance,
+TFRA_Status launchAccumCore(std::shared_ptr<RedisBaseWrapper<K, V>> _table_instance,
                        std::vector<std::string> &keys_prefix_name_slices,
                        const K *keys, const V *values_or_delta,
-                       const bool *exists, const int64_t &Velems_per_flat2_dim0,
+                       const bool *exists, const int64_t &value_dim,
                        std::string &values_dtype_str,
                        std::vector<ThreadContext *> &threads_Insert,
                        std::mutex &threads_Accum_mutex, const int64_t begin,
@@ -147,19 +147,19 @@ Status launchAccumCore(std::shared_ptr<RedisBaseWrapper<K, V>> _table_instance,
   size_t thread_context_id =
       SelectAvailableThreadContext(threads_Insert, threads_Accum_mutex);
 
-  auto statu = _table_instance->MaccumCommand(
+  auto status = _table_instance->MaccumCommand(
       keys, values_or_delta, exists, threads_Insert.at(thread_context_id),
-      begin, end, Velems_per_flat2_dim0, values_dtype_str,
+      begin, end, value_dim, values_dtype_str,
       keys_prefix_name_slices);
 
   threads_Insert[thread_context_id]->thread_occupied.store(
       false, std::memory_order_release);
 
-  return statu;
+  return status;
 }
 
 template <typename K, typename V>
-Status launchDeleteCore(std::shared_ptr<RedisBaseWrapper<K, V>> _table_instance,
+TFRA_Status launchDeleteCore(std::shared_ptr<RedisBaseWrapper<K, V>> _table_instance,
                         std::vector<std::string> &keys_prefix_name_slices,
                         const K *keys,
                         std::vector<ThreadContext *> &threads_Delete,
@@ -168,17 +168,17 @@ Status launchDeleteCore(std::shared_ptr<RedisBaseWrapper<K, V>> _table_instance,
   size_t thread_context_id =
       SelectAvailableThreadContext(threads_Delete, threads_Delete_mutex);
 
-  auto statu =
+  auto status =
       _table_instance->DelCommand(keys, threads_Delete.at(thread_context_id),
                                   begin, end, keys_prefix_name_slices);
 
   threads_Delete[thread_context_id]->thread_occupied.store(
       false, std::memory_order_release);
 
-  return statu;
+  return status;
 }
 
-Status ParseJsonConfig(const std::string *const redis_config_abs_dir,
+TFRA_Status ParseJsonConfig(const std::string *const redis_config_abs_dir,
                        Redis_Connection_Params *redis_connection_params) {
   const char *filename = redis_config_abs_dir->c_str();
   FILE *fp;
@@ -189,30 +189,24 @@ Status ParseJsonConfig(const std::string *const redis_config_abs_dir,
   json_value *config_value;
 
   if (stat(filename, &filestatus) != 0) {
-    LOG(ERROR) << "File " << filename << " not found";
-    return errors::NotFound("File ", filename, " not found");
+    return TFRA_Status(StatusCode::NOT_FOUND, "File " + std::string(filename) + " not found.");
   }
   file_size = filestatus.st_size;
   file_contents = (char *)malloc(file_size);
   if (file_contents == NULL) {
-    LOG(ERROR) << "Memory error: unable to allocate "
-               << std::to_string(file_size) << " bytes";
-    return errors::ResourceExhausted("Memory error: unable to allocate ",
-                                     std::to_string(file_size), " bytes");
+    return TFRA_Status(StatusCode::RESOURCE_EXHAUSTED, "Memory error: unable to allocate " +
+                                     std::to_string(file_size) + " bytes");
   }
   fp = fopen(filename, "rt");
   if (fp == NULL) {
     fclose(fp);
     free(file_contents);
-    LOG(ERROR) << "Unable to open " << redis_config_abs_dir;
-    return errors::PermissionDenied("Unable to open ", redis_config_abs_dir);
+    return TFRA_Status(StatusCode::PERMISSION_DENIED, "Unable to open " + *redis_config_abs_dir);
   }
   if (fread(file_contents, file_size, 1, fp) != 1) {
     fclose(fp);
     free(file_contents);
-    LOG(ERROR) << "Unable t read content of " << redis_config_abs_dir;
-    return errors::Unavailable("Unable t read content of ",
-                               redis_config_abs_dir);
+    return TFRA_Status(StatusCode::UNAVAILABLE, "Unable t read content of " + *redis_config_abs_dir);
   }
   fclose(fp);
 
@@ -220,9 +214,8 @@ Status ParseJsonConfig(const std::string *const redis_config_abs_dir,
   config_value = json_parse(config_json, file_size);
   if (config_value->type != json_object) {
     free(file_contents);
-    LOG(ERROR) << "Unable to parse the json data";
-    return errors::Unknown("Unable to parse the json data from ",
-                           redis_config_abs_dir);
+    return TFRA_Status(StatusCode::UNKNOWN, "Unable to parse the json data from " +
+                           *redis_config_abs_dir);
   }
 
   std::unordered_map<std::string, json_value *> json_hangar;
@@ -242,9 +235,9 @@ Status ParseJsonConfig(const std::string *const redis_config_abs_dir,
         redis_connection_params->json_key_name =                         \
             json_hangar_it->second->u.json_val_type;                     \
       } else {                                                           \
-        LOG(ERROR) << #json_key_name " should be json " #json_val_type;  \
-        return Status(error::INVALID_ARGUMENT,                           \
-                      #json_key_name " should be json " #json_val_type); \
+        return TFRA_Status(StatusCode::INVALID_ARGUMENT,                 \
+              std::string(#json_key_name) + " should be json " +         \
+              std::string(#json_val_type));                              \
       }                                                                  \
     }                                                                    \
   }
@@ -258,12 +251,16 @@ Status ParseJsonConfig(const std::string *const redis_config_abs_dir,
             std::string(json_hangar_it->second->u.string.ptr,     \
                         json_hangar_it->second->u.string.length); \
       } else {                                                    \
-        LOG(ERROR) << #json_key_name " should be json string";    \
-        return Status(error::INVALID_ARGUMENT,                    \
-                      #json_key_name " should be json string");   \
+        return TFRA_Status(StatusCode::INVALID_ARGUMENT,          \
+          std::string(#json_key_name) + " should be json string");\
       }                                                           \
     }                                                             \
   }
+
+// LOG(ERROR) << #json_key_name " should be json " #json_val_type
+//                               " array";            
+// return Status(error::INVALID_ARGUMENT, #json_key_name
+//               " should be json " #json_val_type " array");
 
 #define ReadArrayJsonToParams(json_key_name, json_val_type)                \
   {                                                                        \
@@ -278,17 +275,15 @@ Status ParseJsonConfig(const std::string *const redis_config_abs_dir,
             redis_connection_params->redis_host_port.push_back(            \
                 value_depth1->u.json_val_type);                            \
           } else {                                                         \
-            LOG(ERROR) << #json_key_name " should be json " #json_val_type \
-                                         " array";                         \
-            return Status(error::INVALID_ARGUMENT, #json_key_name          \
-                          " should be json " #json_val_type " array");     \
+            return TFRA_Status(StatusCode::INVALID_ARGUMENT,               \
+                  std::string(#json_key_name) +" should be json "+         \
+                  std::string(#json_val_type) +" array");                  \
           }                                                                \
         }                                                                  \
       } else {                                                             \
-        LOG(ERROR) << #json_key_name " should be json " #json_val_type     \
-                                     " array";                             \
-        return Status(error::INVALID_ARGUMENT, #json_key_name              \
-                      " should be json " #json_val_type " array");         \
+        return TFRA_Status(StatusCode::INVALID_ARGUMENT,                   \
+            std::string(#json_key_name) + " should be json "+              \
+            std::string(#json_val_type) + " array");                       \
       }                                                                    \
     }                                                                      \
   }
@@ -306,15 +301,13 @@ Status ParseJsonConfig(const std::string *const redis_config_abs_dir,
             redis_connection_params->json_key_name.push_back(std::string(    \
                 value_depth1->u.string.ptr, value_depth1->u.string.length)); \
           } else {                                                           \
-            LOG(ERROR) << #json_key_name " should be json string array";     \
-            return Status(error::INVALID_ARGUMENT,                           \
-                          #json_key_name " should be json string array");    \
+            return TFRA_Status(StatusCode::INVALID_ARGUMENT,                 \
+             std::string(#json_key_name) + " should be json string array");  \
           }                                                                  \
         }                                                                    \
       } else {                                                               \
-        LOG(ERROR) << #json_key_name " should be json string array";         \
-        return Status(error::INVALID_ARGUMENT,                               \
-                      #json_key_name " should be json string array");        \
+        return TFRA_Status(StatusCode::INVALID_ARGUMENT,                     \
+            std::string(#json_key_name) + " should be json string array");   \
       }                                                                      \
     }                                                                        \
   }
@@ -394,7 +387,7 @@ Status ParseJsonConfig(const std::string *const redis_config_abs_dir,
   json_value_free(config_value);
   free(file_contents);
 
-  return Status::OK();
+  return TFRA_Status::OK();
 }
 
 extern "C" sds sdsempty(void);
@@ -409,21 +402,21 @@ std::string BuildKeysPrefixNameWithModelTag(const std::string &model_tag,
     keys_prefix_name_md5 = MD5(tmp_keys_prefix_name);
 
     std::string md5_string;
-    char *md5_view_in_redis = sdscatrepr(
-        sdsempty(), reinterpret_cast<char *>(keys_prefix_name_md5.data()), 16);
+    // char *md5_view_in_redis = sdscatrepr(
+    //     sdsempty(), reinterpret_cast<char *>(keys_prefix_name_md5.data()), 16);
     char tmp[3];
     for (int i = 0; i < 16; ++i) {
       memset(tmp, 0x00, sizeof(tmp));
       sprintf(tmp, "%02X", keys_prefix_name_md5[i]);
       md5_string += tmp;
     }
-    LOG(INFO) << "Init table tensor, now prefix name for keys namespace is "
-              << keys_prefix_name << ". The MD5 of prefix name for keys is "
-              << md5_string
-              << ". And Its characters view in redis namespace is "
-              << md5_view_in_redis
-              << ". This MD5 is used to store keys for distinguishing "
-                 "between different model and table names";
+    // LOG(INFO) << "Init table tensor, now prefix name for keys namespace is "
+    //           << keys_prefix_name << ". The MD5 of prefix name for keys is "
+    //           << md5_string
+    //           << ". And Its characters view in redis namespace is "
+    //           << md5_view_in_redis
+    //           << ". This MD5 is used to store keys for distinguishing "
+    //              "between different model and table names";
 
     keys_prefix_name =
         std::string(reinterpret_cast<char *>(keys_prefix_name_md5.data()), 16);
@@ -441,7 +434,7 @@ std::vector<std::string> BuildKeysPrefixNameSlices(
   std::vector<std::string> keys_prefix_name_slices;
   keys_prefix_name_slices.reserve(storage_slice);
   if (redis_hash_tags.size() == storage_slice) {
-    LOG(INFO) << "Using the prefix redis_hash_tags for every bucket.";
+    // LOG(INFO) << "Using the prefix redis_hash_tags for every bucket.";
     for (auto redis_hash_tag : redis_hash_tags) {
       if (redis_hash_tag.back() != '}') {
         redis_hash_tag.push_back('}');
@@ -452,9 +445,9 @@ std::vector<std::string> BuildKeysPrefixNameSlices(
       keys_prefix_name_slices.emplace_back(keys_prefix_name + redis_hash_tag);
     }
   } else {
-    LOG(INFO)
-        << "Number of prefix redis_hash_tags is not equal to the prefix "
-           "storage_slice. Now using the hash tags generated sequentially.";
+    // LOG(INFO)
+    //     << "Number of prefix redis_hash_tags is not equal to the prefix "
+    //        "storage_slice. Now using the hash tags generated sequentially.";
     if (cluster_slots.size() == 0) {
       const unsigned slot_num_in_redis = 16384 / storage_slice;
       const unsigned slot_in_redis_rem = 16384 % storage_slice;
@@ -486,8 +479,8 @@ std::vector<std::string> BuildKeysPrefixNameSlices(
         }
       } else {
         if (cluster_slots.size() > storage_slice) {
-          LOG(WARNING) << "Nodes in Redis service is bigger than storage_slice "
-                          "set by user, it may cause data skew.";
+          // LOG(WARNING) << "Nodes in Redis service is bigger than storage_slice "
+          //                 "set by user, it may cause data skew.";
         }
         for (unsigned i = 0; i < storage_slice; ++i) {
           keys_prefix_name_slices.emplace_back(

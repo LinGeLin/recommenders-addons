@@ -182,6 +182,26 @@ custom_table_library(
     ],
 )
 
+custom_table_library(
+    name = "hkv_ops.so",
+    cuda_srcs = if_cuda([
+        "kernels/hkv_op.cu.cc",
+    ]),
+    copts = [
+        "-Ofast",
+        # "-g",
+    ],
+    deps = [
+        "@hkv//:hkv",
+        ":tfra_register",
+    ],
+    # cuda_deps = if_cuda_for_tf_serving(
+    #     ["@hkv//:hkv"],
+    #     [],
+    #     FOR_TF_SERVING,
+    # ),
+)
+
 # custom_op_library(
 #     name = "_std_cuckoo_hashtable_ops.so",
 #     srcs = [

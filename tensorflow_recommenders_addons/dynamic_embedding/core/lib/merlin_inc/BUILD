@@ -3,7 +3,7 @@ load("@local_config_cuda//cuda:build_defs.bzl", "if_cuda", "if_cuda_is_configure
 package(default_visibility = ["//visibility:public"])
 
 load("//tensorflow_recommenders_addons:tensorflow_recommenders_addons.bzl", "custom_op_library",
-     "if_cuda_for_tf_serving", "tf_nvcc_binary")
+     "if_cuda_for_tf_serving",)
 
 cc_library(
     name = "merlin_kv",
@@ -25,18 +25,4 @@ cc_library(
     deps = [
         "//tensorflow_recommenders_addons/dynamic_embedding/core/lib/utils:cuda_utils",
     ],
-)
-
-tf_nvcc_binary(
-    name="merlin_kv_insert_and_evict_test",
-    srcs=[],
-    cuda_srcs=[
-        "insert_and_evict_test.cu.cc",
-        "test_util.cu.h",
-    ],
-    cuda_deps=[
-        ":merlin_kv",
-    ],
-    copts=[],
-    linkopts=[],
 )

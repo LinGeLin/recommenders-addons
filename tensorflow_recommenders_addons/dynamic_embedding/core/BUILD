@@ -99,3 +99,24 @@ custom_op_library(
 )
 
 # TODO: Add hkv targets.
+custom_op_library(
+    name = "_hkv_ops.so",
+    srcs = [
+        "ops/hkv_hashtable_ops.cc",
+        "utils/utils.h",
+    ],
+    copts = [
+        "-Ofast",
+    ],
+    cuda_deps = if_cuda_for_tf_serving(
+        ["//tensorflow_recommenders_addons/dynamic_embedding/core/lib/merlin_inc:merlin_kv"],
+        [],
+        FOR_TF_SERVING,
+    ),
+    cuda_srcs = if_cuda([
+        "utils/utils.h",
+        "utils/types.h",
+        "kernels/cuckoo_hashtable_op_gpu.h",
+        "kernels/hkv_hashtable_op_gpu.cu.cc",
+    ]) + glob(["kernels/lookup_impl/lookup_table_op_hkv*"]),
+)

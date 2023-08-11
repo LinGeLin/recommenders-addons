@@ -140,7 +140,24 @@ using GPUDevice = Eigen::ThreadPoolDevice;
 struct TableWrapperInitOptions {
   size_t max_capacity;
   size_t init_capacity;
+  size_t max_hbm_for_vectors;
+  size_t max_bucket_size;
+  float max_load_factor;
+  int block_size;
+  int io_block_size;
 };
+
+template<typename V>
+__global__ void gpu_fill_default_values(V* d_vals, V* d_def_val, size_t len, size_t dim) {
+  int index = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride = blockDim.x * gridDim.x;
+
+  for (int i = index; i < len * dim; i += stride) {
+      int row = i / dim;
+      int col = i % dim;
+      d_vals[row * dim + col] = *d_def_val; 
+  }
+}
 
 template <class K, class V>
 class TableWrapper {
@@ -158,8 +175,9 @@ class TableWrapper {
     // Since currently GPU nodes are not compatible to fast
     // pcie connections for D2H non-continous wirte, so just
     // use pure hbm mode now.
-    mkv_options.max_hbm_for_vectors = std::numeric_limits<size_t>::max();
-    mkv_options.max_load_factor = 0.63;
+    // mkv_options.max_hbm_for_vectors = std::numeric_limits<size_t>::max();
+    mkv_options.max_hbm_for_vectors = init_options.max_hbm_for_vectors;
+    mkv_options.max_load_factor = 0.5;
     mkv_options.block_size = nv::merlin::SAFE_GET_BLOCK_SIZE(1024);
     mkv_options.dim = dim;
     mkv_options.evict_strategy = nv::merlin::EvictStrategy::kCustomized;
@@ -242,12 +260,12 @@ class TableWrapper {
                     const size_t buffer_size) const {
     LOG(INFO) << "dump_to_file, filepath: " << filepath << ", dim: " << dim
               << ", stream: " << stream << ", buffer_size: " << buffer_size;
-    std::unique_ptr<TimestampV1CompatFile<K, V, uint64_t>> wfile;
-    string keyfile = ;
-    string valuefile = ;
-    string metafile = ;
+    std::unique_ptr<nv::merlin::LocalKVFile<K, V, uint64_t>> wfile;
+    string keyfile = filepath + "-keys";
+    string valuefile = filepath + "-values";
+    string metafile = filepath + "-metas";
 
-    wfile.reset(new TimestampV1CompatFile<K, V, uint64_t>);
+    wfile.reset(new nv::merlin::LocalKVFile<K, V, uint64_t>);
     bool open_ok = wfile->open(keyfile, valuefile, metafile, "wb");
     if (!open_ok) {
       std::string error_msg = "Failed to dump to file to " + keyfile + ", " + valuefile + ", " + metafile;
@@ -262,42 +280,47 @@ class TableWrapper {
     wfile->close();
   }
 
+  // TODO (LinGeLin) support metas
+  bool is_valid_metas(const std::string& keyfile, const std::string& metafile) {
+    return false;
+  }
+
   void load_from_file(const string filepath,
                       size_t key_num, size_t dim, cudaStream_t stream,
                       const size_t buffer_size) {
     std::unique_ptr<nv::merlin::BaseKVFile<K, V, uint64_t>> rfile;
-    string keyfile = ;
-    string valuefile = ;
-    string metafile = ;
+    string keyfile = filepath + "-keys";
+    string valuefile = filepath + "-values";
+    string metafile = filepath + "-metas";
     //rfile.reset(new TimestampV1CompatFile<K, V, uint64_t>);
     bool has_metas = false;
     bool open_ok = false;
 
     if (is_valid_metas(keyfile, metafile)) {
-      rfile.reset(new TimestampV1CompatFile<K, V, uint64_t>);
-      open_ok = reinterpret_cast<TimestampV1CompatFile<K, V, uint64_t>*>(rfile.get())->open(keyfile, valuefile, metafile, "rb");
+      rfile.reset(new nv::merlin::LocalKVFile<K, V, uint64_t>);
+      open_ok = reinterpret_cast<nv::merlin::LocalKVFile<K, V, uint64_t>*>(rfile.get())->open(keyfile, valuefile, metafile, "rb");
       has_metas = true;
     } else {
       rfile.reset(new KVOnlyFile<K, V, uint64_t>);
       open_ok = reinterpret_cast<KVOnlyFile<K, V, uint64_t>*>(rfile.get())->open(keyfile, valuefile, "rb");
     }
     if (!open_ok) {
-      std::string error_msg = "Failed to load from file to " + keyfile + ", " + valuefile + ", " + metafile;
-      throw std::runtime_error("Failed to ");
+      std::string error_msg = "Failed to load from file " + keyfile + ", " + valuefile + ", " + metafile;
+      throw std::runtime_error(error_msg);
     }
 
     size_t n_loaded = table_->load(rfile.get(), buffer_size, stream);
     if (has_metas) {
-      LOG(INFO) << "[op] Load " << n_loaded << " pairs into keyfile: "
+      LOG(INFO) << "[op] Load " << n_loaded << " pairs from keyfile: "
                 << keyfile << ", and valuefile: " << valuefile
                 << ", and metafile" << metafile;
     } else {
-      LOG(INFO) << "[op] Load " << n_loaded << " pairs into keyfile: "
+      LOG(INFO) << "[op] Load " << n_loaded << " pairs from keyfile: "
                 << keyfile << ", and valuefile: " << valuefile;
     }
     CUDA_CHECK(cudaStreamSynchronize(stream));
     if (has_metas) {
-      reinterpret_cast<TimestampV1CompatFile<K, V, uint64_t>*>(rfile.get())->close();
+      reinterpret_cast<nv::merlin::LocalKVFile<K, V, uint64_t>*>(rfile.get())->close();
     } else {
       reinterpret_cast<KVOnlyFile<K, V, uint64_t>*>(rfile.get())->close();
     }

@@ -133,6 +133,81 @@ class CuckooHashTableCreator(KVCreator):
     return config
 
 
+KHkvHashTableInitCapacity = 1024 * 1024
+KHkvHashTableMaxCapacity = 1024 * 1024 * 64
+KHkvHashTableMaxHbmForVectors = 1024 * 1024 * 1024
+
+
+class HkvHashTableConfig(object):
+
+  def __init__(self,
+               init_capacity=KHkvHashTableInitCapacity,
+               max_capacity=KHkvHashTableMaxCapacity,
+               max_hbm_for_vectors=KHkvHashTableMaxHbmForVectors):
+    """ CuckooHashTableConfig include nothing for parameter default satisfied.
+    """
+    self.init_capacity = init_capacity
+    self.max_capacity = max_capacity
+    self.max_hbm_for_vectors = max_hbm_for_vectors
+
+
+class HkvHashTableCreator(KVCreator):
+
+  def create(
+      self,
+      key_dtype=None,
+      value_dtype=None,
+      default_value=None,
+      name=None,
+      checkpoint=None,
+      init_size=KHkvHashTableInitCapacity,
+      config=None,
+      device=None,
+      shard_saveable_object_fn=None,
+  ):
+    self.key_dtype = key_dtype
+    self.value_dtype = value_dtype
+    self.default_value = default_value
+    self.name = name
+    self.checkpoint = checkpoint
+    self.init_capacity = init_size
+    self.max_capacity = KHkvHashTableMaxCapacity
+    self.max_hbm_for_vectors = KHkvHashTableMaxHbmForVectors
+    if self.config and isinstance(self.config, de.HkvHashTableConfig):
+      self.max_capacity = self.config.max_capacity
+      self.max_hbm_for_vectors = self.config.max_hbm_for_vectors
+    self.device = device
+    self.shard_saveable_object_fn = shard_saveable_object_fn
+
+    return de.HkvHashTable(key_dtype=self.key_dtype,
+                           value_dtype=self.value_dtype,
+                           default_value=self.default_value,
+                           name=self.name,
+                           checkpoint=self.checkpoint,
+                           init_capacity=self.init_capacity,
+                           max_capacity=self.max_capacity,
+                           max_hbm_for_vectors=self.max_hbm_for_vectors,
+                           config=self.config)
+
+  def get_config(self):
+    if not context.executing_eagerly():
+      raise RuntimeError(
+          'Unsupported to serialize python object of HkvHashTableCreator.')
+
+    config = {
+        'key_dtype': self.key_dtype,
+        'value_dtype': self.value_dtype,
+        'default_value': self.default_value.numpy(),
+        'name': self.name,
+        'checkpoint': self.checkpoint,
+        'init_capacity': self.init_capacity,
+        'max_capacity': self.max_capacity,
+        'config': self.config,
+        'device': self.device,
+    }
+    return config
+
+
 class RedisTableConfig(object):
   """ 
   RedisTableConfig config json file for connecting Redis service and 

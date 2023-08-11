@@ -15,7 +15,7 @@ limitations under the License.
 #if GOOGLE_CUDA
 
 #include "tensorflow_recommenders_addons/dynamic_embedding/core/kernels/cuckoo_hashtable_op_gpu.h"
-#include "tensorflow_recommenders_addons/dynamic_embedding/core/kernels/lookup_impl/lookup_table_op_gpu.h"
+#include "tensorflow_recommenders_addons/dynamic_embedding/core/kernels/lookup_impl/lookup_table_op_hkv.h"
 #include "tensorflow_recommenders_addons/dynamic_embedding/core/utils/utils.h"
 
 #define EIGEN_USE_GPU
@@ -35,10 +35,9 @@ limitations under the License.
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/path.h"
 #include "tensorflow/core/util/env_var.h"
-#include "tensorflow/stream_executor/stream.h"
-
 #include "tensorflow/core/util/gpu_device_functions.h"
 #include "tensorflow/core/util/gpu_kernel_helper.h"
+#include "tensorflow/stream_executor/stream.h"
 
 namespace tensorflow {
 
@@ -47,7 +46,7 @@ using GPUDevice = Eigen::GpuDevice;
 namespace recommenders_addons {
 namespace lookup {
 
-constexpr size_t kDefaultGpuInitCapacity = 1024;
+constexpr size_t kDefaultGpuInitCapacity = 1024 * 1024;
 
 using tensorflow::OpKernelContext;
 using tensorflow::lookup::LookupInterface;
@@ -55,7 +54,6 @@ using tensorflow::lookup::LookupInterface;
 template <class K, class V>
 class HkvHashTableOfTensorsGpu final : public LookupInterface {
  private:
-
  public:
   HkvHashTableOfTensorsGpu(OpKernelContext* ctx, OpKernel* kernel) {
     OP_REQUIRES_OK(ctx,
@@ -70,29 +68,44 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
 
     int64 init_capacity_i64 = 0;
     int64 max_capacity_i64 = 0;
-    OP_REQUIRES_OK(ctx, GetNodeAttr(kernel->def(), "init_capacity", &init_capacity_i64));
-    OP_REQUIRES_OK(ctx, GetNodeAttr(kernel->def(), "max_capacity", &max_capacity_i64));
+    int64 max_hbm_for_vectors_i64 = 0;
+    OP_REQUIRES_OK(
+        ctx, GetNodeAttr(kernel->def(), "init_capacity", &init_capacity_i64));
+    OP_REQUIRES_OK(
+        ctx, GetNodeAttr(kernel->def(), "max_capacity", &max_capacity_i64));
+    OP_REQUIRES_OK(ctx, GetNodeAttr(kernel->def(), "max_hbm_for_vectors",
+                                    &max_hbm_for_vectors_i64));
+    OP_REQUIRES(
+        ctx, (max_hbm_for_vectors_i64 > 0),
+        errors::InvalidArgument("params max_hbm_for_vectors less than 0"));
+
     options.init_capacity = static_cast<size_t>(init_capacity_i64);
     options.max_capacity = static_cast<size_t>(max_capacity_i64);
+    options.max_hbm_for_vectors = static_cast<size_t>(max_hbm_for_vectors_i64);
 
     if (options.max_capacity == 0) {
-      char* env_max_capacity_str = std::getenv("TFRA_GPU_HASHTABLE_UPLIMIT_SIZE");
-      if (env_max_capacity_str) {
-        options.max_capacity = static_cast<size_t>(std::atoll(env_max_capacity_str));
-        LOG(WARNING) << "GPU table max capacity was not set in attribute, get "
-                     << options.max_capacity << " from env TFRA_GPU_HASHTABLE_UPLIMIT_SIZE.";
-      } else {
-        throw std::runtime_error("max_capaicty=0 and TFRA_GPU_HASHTABLE_UPLIMIT_SIZE not set is not valid.");
-      }
+      char* env_max_capacity_str =
+          std::getenv("TFRA_GPU_HASHTABLE_UPLIMIT_SIZE");
+      OP_REQUIRES(ctx, (env_max_capacity_str != nullptr),
+                  errors::InvalidArgument(
+                      "max_capaicty=0 and TFRA_GPU_HASHTABLE_UPLIMIT_SIZE not "
+                      "set is not valid."));
+      options.max_capacity =
+          static_cast<size_t>(std::atoll(env_max_capacity_str));
+      LOG(WARNING) << "GPU table max capacity was not set in attribute, get "
+                   << options.max_capacity
+                   << " from env TFRA_GPU_HASHTABLE_UPLIMIT_SIZE.";
     }
     if (options.init_capacity == 0) {
       options.init_capacity = kDefaultGpuInitCapacity;
-      LOG(WARNING) << "GPU table init capacity was not set in attribute, use default"
-                   << kDefaultGpuInitCapacity;
+      LOG(WARNING)
+          << "GPU table init capacity was not set in attribute, use default"
+          << kDefaultGpuInitCapacity;
     }
     if (options.max_capacity < options.init_capacity) {
-      LOG(WARNING) << "GPU table max_capacity < init_capacity, (" << options.max_capacity
-                   << "/" << options.init_capacity << "). Reset to " << options.init_capacity;
+      LOG(WARNING) << "GPU table max_capacity < init_capacity, ("
+                   << options.max_capacity << "/" << options.init_capacity
+                   << "). Reset to " << options.init_capacity;
       options.max_capacity = options.init_capacity;
     }
 
@@ -102,19 +115,22 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
     this->CreateTable(options, &table_);
     OP_REQUIRES(ctx, (table_ != nullptr),
                 errors::InvalidArgument("HashTable on GPU is created failed!"));
-
     LOG(INFO) << "GPU table max capacity was created on max_capacity: "
-              << options.max_capacity << ", and init capacity: "
-              << options.init_capacity 
+              << options.max_capacity
+              << ", and init capacity: " << options.init_capacity
               << " with K=" << std::type_index(typeid(K)).name()
               << ", V=" << std::type_index(typeid(V)).name();
   }
 
   ~HkvHashTableOfTensorsGpu() {
+    if (table_) {
+      delete table_;
+    }
   }
 
-  void CreateTable(gpu::TableWrapperInitOptions& options, gpu::TableWrapper<K, V>** pptable) {
-      gpu::CreateTableImpl(pptable, options, runtime_dim_);
+  void CreateTable(gpu::TableWrapperInitOptions& options,
+                   gpu::TableWrapper<K, V>** pptable) {
+    gpu::CreateTableImpl(pptable, options, runtime_dim_);
   }
 
   size_t size() const override {
@@ -132,7 +148,8 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
     tf_shared_lock l(mu_);
     auto stream = ctx->eigen_device<GPUDevice>().stream();
     int64 hret = static_cast<int64>(table_->get_size(stream));
-    CUDA_CHECK(cudaMemcpyAsync(s, &hret, sizeof(int64), cudaMemcpyHostToDevice, stream));
+    CUDA_CHECK(cudaMemcpyAsync(s, &hret, sizeof(int64), cudaMemcpyHostToDevice,
+                               stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
   }
 
@@ -157,10 +174,9 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
       {
         tf_shared_lock l(mu_);
         table_->get((const K*)d_keys.tensor_data().data(),
-                    (V*)(value->tensor_data().data()),
-                    d_status, len,
-                    (V*)(default_value.tensor_data().data()),
-                    stream, is_full_default);
+                    (V*)(value->tensor_data().data()), d_status, len,
+                    (V*)(default_value.tensor_data().data()), stream,
+                    is_full_default);
         CUDA_CHECK(cudaStreamSynchronize(stream));
       }
       CUDA_CHECK(cudaFreeAsync(d_status, stream));
@@ -190,8 +206,8 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
         table_->get((const K*)d_keys.tensor_data().data(),
                     (V*)(value->tensor_data().data()),
                     (bool*)exists->tensor_data().data(), len,
-                    (V*)(default_value.tensor_data().data()),
-                    stream, is_full_default);
+                    (V*)(default_value.tensor_data().data()), stream,
+                    is_full_default);
       }
       CUDA_CHECK(cudaStreamSynchronize(stream));
     }
@@ -205,8 +221,7 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
     {
       mutex_lock l(mu_);
       table_->upsert((const K*)keys.tensor_data().data(),
-                     (const V*)(values.tensor_data().data()),
-                     len, stream);
+                     (const V*)(values.tensor_data().data()), len, stream);
     };
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
@@ -219,10 +234,9 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
     auto stream = ctx->eigen_device<GPUDevice>().stream();
     {
       mutex_lock l(mu_);
-      table_->accum(
-          (const K*)keys.tensor_data().data(),
-          (const V*)(values_or_deltas.tensor_data().data()),
-          (const bool*)exists.tensor_data().data(), len, stream);
+      table_->accum((const K*)keys.tensor_data().data(),
+                    (const V*)(values_or_deltas.tensor_data().data()),
+                    (const bool*)exists.tensor_data().data(), len, stream);
     };
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
@@ -236,9 +250,10 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
 
     if (len > 0) {
       CUDA_CHECK(cudaMallocAsync((void**)&d_keys, sizeof(K) * len, stream));
-      CUDA_CHECK(cudaMemsetAsync((void*)&d_keys, 0, sizeof(K) * len, stream));
-      CUDA_CHECK(cudaMemcpyAsync((void*)d_keys, (void*)keys.tensor_data().data(),
-                            sizeof(K) * len, cudaMemcpyDefault, stream));
+      CUDA_CHECK(cudaMemsetAsync((void*)d_keys, 0, sizeof(K) * len, stream));
+      CUDA_CHECK(cudaMemcpyAsync((void*)d_keys,
+                                 (void*)keys.tensor_data().data(),
+                                 sizeof(K) * len, cudaMemcpyDefault, stream));
       {
         mutex_lock l(mu_);
         table_->remove((const K*)d_keys, len, stream);
@@ -268,19 +283,20 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
     if (len > 0) {
       CUDA_CHECK(cudaMallocAsync((void**)&d_keys, sizeof(K) * len, stream));
       CUDA_CHECK(cudaMemsetAsync((void*)&d_keys, 0, sizeof(K) * len, stream));
-      CUDA_CHECK(
-          cudaMallocAsync((void**)&d_values, sizeof(V) * runtime_dim_ * len, stream));
-      CUDA_CHECK(
-          cudaMemsetAsync((void*)&d_values, 0, sizeof(V) * runtime_dim_ * len, stream));
-      CUDA_CHECK(cudaMemcpyAsync((void*)d_keys, (void*)keys.tensor_data().data(),
-                            sizeof(K) * len, cudaMemcpyDefault, stream));
-      CUDA_CHECK(cudaMemcpyAsync((void*)d_values, (void*)values.tensor_data().data(),
-                            sizeof(V) * runtime_dim_ * len, cudaMemcpyDefault, stream));
+      CUDA_CHECK(cudaMallocAsync((void**)&d_values,
+                                 sizeof(V) * runtime_dim_ * len, stream));
+      CUDA_CHECK(cudaMemsetAsync((void*)&d_values, 0,
+                                 sizeof(V) * runtime_dim_ * len, stream));
+      CUDA_CHECK(cudaMemcpyAsync((void*)d_keys,
+                                 (void*)keys.tensor_data().data(),
+                                 sizeof(K) * len, cudaMemcpyDefault, stream));
+      CUDA_CHECK(cudaMemcpyAsync(
+          (void*)d_values, (void*)values.tensor_data().data(),
+          sizeof(V) * runtime_dim_ * len, cudaMemcpyDefault, stream));
       {
         mutex_lock l(mu_);
         table_->clear(stream);
-        table_->upsert((const K*)d_keys,
-                       (const V*)d_values, len, stream);
+        table_->upsert((const K*)d_keys, (const V*)d_values, len, stream);
       }
       CUDA_CHECK(cudaStreamSynchronize(stream));
       CUDA_CHECK(cudaFreeAsync(d_keys, stream));
@@ -313,8 +329,8 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
     CUDA_CHECK(cudaMemsetAsync(d_dump_counter, 0, sizeof(size_t), stream));
 
     AllocatorAttributes attr;
-    //attr.set_gpu_compatible(true);
-    //attr.set_nic_compatible(true);
+    // attr.set_gpu_compatible(true);
+    // attr.set_nic_compatible(true);
     attr.set_on_host(false);
 
     TF_RETURN_IF_ERROR(
@@ -323,9 +339,8 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
         "values", TensorShape({size, (int64)runtime_dim_}), &values, attr));
     if (size) {
       tf_shared_lock l(mu_);
-      table_->dump((K*)keys->flat<K>().data(),
-                   (V*)(values->matrix<V>().data()), offset,
-                   len, d_dump_counter, stream);
+      table_->dump((K*)keys->flat<K>().data(), (V*)(values->matrix<V>().data()),
+                   offset, len, d_dump_counter, stream);
     }
     CUDA_CHECK(cudaFreeAsync(d_dump_counter, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -356,8 +371,8 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
     CUDA_CHECK(cudaMemsetAsync(d_dump_counter, 0, sizeof(size_t), stream));
 
     AllocatorAttributes attr;
-    //attr.set_gpu_compatible(true);
-    //attr.set_nic_compatible(true);
+    // attr.set_gpu_compatible(true);
+    // attr.set_nic_compatible(true);
     attr.set_on_host(false);
 
     TF_RETURN_IF_ERROR(
@@ -369,9 +384,9 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
     if (size) {
       tf_shared_lock l(mu_);
       table_->dump_with_metas((K*)keys->flat<K>().data(),
-                             (V*)(values->matrix<V>().data()),
-                             (uint64_t*)(metas->flat<V>().data()),
-                             offset, len, d_dump_counter, stream);
+                              (V*)(values->matrix<V>().data()),
+                              (uint64_t*)(metas->flat<V>().data()), offset, len,
+                              d_dump_counter, stream);
       CUDA_CHECK(cudaStreamSynchronize(stream));
     }
     CUDA_CHECK(cudaFreeAsync(d_dump_counter, stream));
@@ -381,10 +396,10 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
 
   Status ExportKeysAndMetas(OpKernelContext* ctx, size_t split_size) {
     tf_shared_lock l(mu_);
-    size_t span_len = 0;
+    // size_t span_len = 0;
     int64 size = 0;
 
-    const size_t offset = 0;
+    // const size_t offset = 0;
 
     Tensor* keys = nullptr;
     Tensor* metas = nullptr;
@@ -403,10 +418,9 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
           ctx->allocate_output("metas", TensorShape({(size)}), &metas, attr));
 
       if (size) {
-        table_->dump_keys_and_metas((K*)keys->flat<K>().data(),
-                                    (int64*)(metas->flat<int64>().data()),
-                                    static_cast<size_t>(size),
-                                    split_size, stream);
+        table_->dump_keys_and_metas(
+            (K*)keys->flat<K>().data(), (int64*)(metas->flat<int64>().data()),
+            static_cast<size_t>(size), split_size, stream);
       }
     }
     CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -432,7 +446,7 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
     {
       mutex_lock l(mu_);
 
-      string keyfile = filepath + ".keys";
+      string keyfile = filepath + "-keys";
       FILE* tmpfd = fopen(keyfile.c_str(), "rb");
       if (tmpfd == nullptr) {
         return errors::NotFound("Failed to read key file", keyfile);
@@ -445,8 +459,7 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
 
       table_->clear(stream);
       CUDA_CHECK(cudaStreamSynchronize(stream));
-      table_->load_from_file(filepath, size, runtime_dim_, stream,
-                             buffer_size);
+      table_->load_from_file(filepath, size, runtime_dim_, stream, buffer_size);
     }
     CUDA_CHECK(cudaStreamSynchronize(stream));
     return Status::OK();
@@ -542,7 +555,7 @@ class HashTableFindWithExistsGpuOp : public OpKernel {
                    ctx->allocate_output("exists", keys.shape(), &exists, attr));
 
     OP_REQUIRES_OK(ctx, table_hkv->FindWithExists(ctx, keys, values,
-                                                     default_values, exists));
+                                                  default_values, exists));
   }
 };
 
@@ -596,12 +609,12 @@ class HashTableAccumGpuOp : public OpKernel {
     const Tensor& exists = ctx->input(3);
     OP_REQUIRES_OK(
         ctx, table->CheckKeyAndValueTensorsForInsert(keys, values_or_deltas));
-    OP_REQUIRES_OK(ctx,
-                   table_hkv->Accum(ctx, keys, values_or_deltas, exists));
+    OP_REQUIRES_OK(ctx, table_hkv->Accum(ctx, keys, values_or_deltas, exists));
   }
 };
 
 // Table remove op.
+// template<class K, class V>
 class HashTableRemoveGpuOp : public OpKernel {
  public:
   explicit HashTableRemoveGpuOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
@@ -642,6 +655,7 @@ class HashTableClearGpuOp : public OpKernel {
 };
 
 // Op that returns the size of the given table.
+template <class K, class V>
 class HashTableSizeGpuOp : public OpKernel {
  public:
   explicit HashTableSizeGpuOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
@@ -660,11 +674,14 @@ class HashTableSizeGpuOp : public OpKernel {
 
     OP_REQUIRES_OK(ctx,
                    ctx->allocate_output("size", TensorShape({}), &out, attr));
-
     int64* p_size = (int64*)out->flat<int64>().data();
     table_hkv->size_i64(ctx, p_size);
   }
 };
+
+// REGISTER_KERNEL_BUILDER(
+//     Name(PREFIX_OP_NAME(HkvHashTableSize)).Device(DEVICE_GPU),
+//     HashTableSizeGpuOp);
 
 // Op that outputs tensors of all keys and all values.
 class HashTableExportGpuOp : public OpKernel {
@@ -697,8 +714,7 @@ class HashTableExportWithMetasGpuOp : public OpKernel {
     core::ScopedUnref unref_me(table);
     lookup::HkvHashTableOfTensorsGpu<K, V>* table_hkv =
         (lookup::HkvHashTableOfTensorsGpu<K, V>*)table;
-    OP_REQUIRES_OK(
-        ctx, table_hkv->ExportValuesWithMetas(ctx));
+    OP_REQUIRES_OK(ctx, table_hkv->ExportValuesWithMetas(ctx));
   }
 };
 
@@ -716,8 +732,10 @@ class HashTableExportKeysAndMetasGpuOp : public OpKernel {
     core::ScopedUnref unref_me(table);
     lookup::HkvHashTableOfTensorsGpu<K, V>* table_hkv =
         (lookup::HkvHashTableOfTensorsGpu<K, V>*)table;
-    OP_REQUIRES_OK(ctx, table_hkv->ExportKeysAndMetas(ctx, static_cast<size_t>(split_size_i64_)));
+    OP_REQUIRES_OK(ctx, table_hkv->ExportKeysAndMetas(
+                            ctx, static_cast<size_t>(split_size_i64_)));
   }
+
  private:
   int64 split_size_i64_;
 };
@@ -743,8 +761,8 @@ class HashTableExportToFileGpuOp : public OpKernel {
     string filepath = string(ftensor.scalar<tstring>()().data());
     lookup::HkvHashTableOfTensorsGpu<K, V>* table_hkv =
         (lookup::HkvHashTableOfTensorsGpu<K, V>*)table;
-    OP_REQUIRES_OK(
-        ctx, table_hkv->ExportValuesToFile(ctx, filepath, buffer_size_));
+    OP_REQUIRES_OK(ctx,
+                   table_hkv->ExportValuesToFile(ctx, filepath, buffer_size_));
   }
 
  private:
@@ -808,70 +826,69 @@ class HashTableImportFromFileGpuOp : public OpKernel {
 };
 
 // Register the HkvHashTableOfTensors op.
-
 #define REGISTER_KERNEL(key_dtype, value_dtype)                                \
   REGISTER_KERNEL_BUILDER(                                                     \
-      Name(PREFIX_OP_NAME(HkvHashTableOfTensors))                           \
+      Name(PREFIX_OP_NAME(HkvHashTableOfTensors))                              \
           .Device(DEVICE_GPU)                                                  \
           .TypeConstraint<key_dtype>("key_dtype")                              \
           .TypeConstraint<value_dtype>("value_dtype"),                         \
-      HashTableGpuOp<                                                          \
-          lookup::HkvHashTableOfTensorsGpu<key_dtype, value_dtype>,         \
-          key_dtype, value_dtype>);                                            \
-  REGISTER_KERNEL_BUILDER(Name(PREFIX_OP_NAME(HkvHashTableClear))           \
+      HashTableGpuOp<lookup::HkvHashTableOfTensorsGpu<key_dtype, value_dtype>, \
+                     key_dtype, value_dtype>);                                 \
+  REGISTER_KERNEL_BUILDER(Name(PREFIX_OP_NAME(HkvHashTableClear))              \
                               .Device(DEVICE_GPU)                              \
                               .TypeConstraint<key_dtype>("key_dtype")          \
                               .TypeConstraint<value_dtype>("value_dtype"),     \
                           HashTableClearGpuOp<key_dtype, value_dtype>);        \
-  REGISTER_KERNEL_BUILDER(Name(PREFIX_OP_NAME(HkvHashTableSize))            \
+  REGISTER_KERNEL_BUILDER(Name(PREFIX_OP_NAME(HkvHashTableSize))               \
                               .Device(DEVICE_GPU)                              \
                               .TypeConstraint<key_dtype>("key_dtype")          \
                               .TypeConstraint<value_dtype>("value_dtype"),     \
                           HashTableSizeGpuOp<key_dtype, value_dtype>);         \
-  REGISTER_KERNEL_BUILDER(Name(PREFIX_OP_NAME(HkvHashTableAccum))           \
+  REGISTER_KERNEL_BUILDER(Name(PREFIX_OP_NAME(HkvHashTableAccum))              \
                               .Device(DEVICE_GPU)                              \
                               .TypeConstraint<key_dtype>("key_dtype")          \
                               .TypeConstraint<value_dtype>("value_dtype"),     \
                           HashTableAccumGpuOp<key_dtype, value_dtype>);        \
-  REGISTER_KERNEL_BUILDER(Name(PREFIX_OP_NAME(HkvHashTableExportWithMetas)) \
-                              .Device(DEVICE_GPU)                              \
-                              .TypeConstraint<key_dtype>("key_dtype")          \
-                              .TypeConstraint<value_dtype>("value_dtype"),     \
-                          HashTableExportWithMetasGpuOp<key_dtype, value_dtype>); \
-  REGISTER_KERNEL_BUILDER(Name(PREFIX_OP_NAME(HkvHashTableExportToFile))    \
+  REGISTER_KERNEL_BUILDER(                                                     \
+      Name(PREFIX_OP_NAME(HkvHashTableExportWithMetas))                        \
+          .Device(DEVICE_GPU)                                                  \
+          .TypeConstraint<key_dtype>("key_dtype")                              \
+          .TypeConstraint<value_dtype>("value_dtype"),                         \
+      HashTableExportWithMetasGpuOp<key_dtype, value_dtype>);                  \
+  REGISTER_KERNEL_BUILDER(Name(PREFIX_OP_NAME(HkvHashTableExportToFile))       \
                               .Device(DEVICE_GPU)                              \
                               .HostMemory("filepath")                          \
                               .TypeConstraint<key_dtype>("key_dtype")          \
                               .TypeConstraint<value_dtype>("value_dtype"),     \
                           HashTableExportToFileGpuOp<key_dtype, value_dtype>); \
   REGISTER_KERNEL_BUILDER(                                                     \
-      Name(PREFIX_OP_NAME(HkvHashTableImportFromFile))                      \
+      Name(PREFIX_OP_NAME(HkvHashTableImportFromFile))                         \
           .Device(DEVICE_GPU)                                                  \
           .HostMemory("filepath")                                              \
           .TypeConstraint<key_dtype>("key_dtype")                              \
           .TypeConstraint<value_dtype>("value_dtype"),                         \
       HashTableImportFromFileGpuOp<key_dtype, value_dtype>);                   \
   REGISTER_KERNEL_BUILDER(                                                     \
-      Name(PREFIX_OP_NAME(HkvHashTableFindWithExists))                      \
+      Name(PREFIX_OP_NAME(HkvHashTableFindWithExists))                         \
           .Device(DEVICE_GPU)                                                  \
           .TypeConstraint<key_dtype>("Tin")                                    \
           .TypeConstraint<value_dtype>("Tout"),                                \
       HashTableFindWithExistsGpuOp<key_dtype, value_dtype>);
 
 REGISTER_KERNEL(int64, float);
-REGISTER_KERNEL(int64, Eigen::half);
-REGISTER_KERNEL(int64, int64);
-REGISTER_KERNEL(int64, int32);
 REGISTER_KERNEL(int64, int8);
-REGISTER_KERNEL(int32, float);
+REGISTER_KERNEL(int64, int32);
+REGISTER_KERNEL(int64, int64);
+REGISTER_KERNEL(int64, Eigen::half);
 
 #undef REGISTER_KERNEL
 
-#define SINGLE_ATTR_REGISTER_KERNEL(key_dtype, value_type)                    \
-  REGISTER_KERNEL_BUILDER(Name(PREFIX_OP_NAME(HkvHashTableExportKeysAndMetas)) \
-                              .Device(DEVICE_GPU)                              \
-                              .TypeConstraint<key_dtype>("Tkeys"),          \
-                          HashTableExportKeysAndMetasGpuOp<key_dtype, value_type>);
+#define SINGLE_ATTR_REGISTER_KERNEL(key_dtype, value_type) \
+  REGISTER_KERNEL_BUILDER(                                 \
+      Name(PREFIX_OP_NAME(HkvHashTableExportKeysAndMetas)) \
+          .Device(DEVICE_GPU)                              \
+          .TypeConstraint<key_dtype>("Tkeys"),             \
+      HashTableExportKeysAndMetasGpuOp<key_dtype, value_type>);
 
 SINGLE_ATTR_REGISTER_KERNEL(int64, float);
 

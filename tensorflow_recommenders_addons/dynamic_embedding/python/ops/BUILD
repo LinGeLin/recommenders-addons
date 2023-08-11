@@ -16,6 +16,7 @@ py_library(
         "//tensorflow_recommenders_addons/dynamic_embedding/core:_data_flow_ops.so",
         "//tensorflow_recommenders_addons/dynamic_embedding/core:_math_ops.so",
         "//tensorflow_recommenders_addons/dynamic_embedding/core:_redis_table_ops.so",
+        "//tensorflow_recommenders_addons/dynamic_embedding/core:_hkv_ops.so",
     ],
     srcs_version = "PY2AND3",
 )

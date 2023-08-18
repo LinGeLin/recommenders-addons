@@ -112,7 +112,7 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
     if (table_) {
       return;
     }
-    this->CreateTable(options, &table_);
+    OP_REQUIRES_OK(ctx, this->CreateTable(options, &table_));
     OP_REQUIRES(ctx, (table_ != nullptr),
                 errors::InvalidArgument("HashTable on GPU is created failed!"));
     LOG(INFO) << "GPU table max capacity was created on max_capacity: "
@@ -128,9 +128,9 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
     }
   }
 
-  void CreateTable(gpu::TableWrapperInitOptions& options,
-                   gpu::TableWrapper<K, V>** pptable) {
-    gpu::CreateTableImpl(pptable, options, runtime_dim_);
+  Status CreateTable(gpu::TableWrapperInitOptions& options,
+                     gpu::TableWrapper<K, V>** pptable) {
+    return gpu::CreateTableImpl(pptable, options, runtime_dim_);
   }
 
   size_t size() const override {
@@ -173,11 +173,15 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
       CUDA_CHECK(cudaMemsetAsync(d_status, 0, sizeof(bool) * len, stream));
       {
         tf_shared_lock l(mu_);
-        table_->get((const K*)d_keys.tensor_data().data(),
-                    (V*)(value->tensor_data().data()), d_status, len,
-                    (V*)(default_value.tensor_data().data()), stream,
-                    is_full_default);
-        CUDA_CHECK(cudaStreamSynchronize(stream));
+        try {
+          table_->get((const K*)d_keys.tensor_data().data(),
+                      (V*)(value->tensor_data().data()), d_status, len,
+                      (V*)(default_value.tensor_data().data()), stream,
+                      is_full_default);
+          CUDA_CHECK(cudaStreamSynchronize(stream));
+        } catch (std::runtime_error& e) {
+          return Status(tensorflow::error::INTERNAL, e.what());
+        }
       }
       CUDA_CHECK(cudaFreeAsync(d_status, stream));
     }
@@ -203,13 +207,17 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
           is_full_default ? default_value.shape().dim_size(0) : 1;
       {
         tf_shared_lock l(mu_);
-        table_->get((const K*)d_keys.tensor_data().data(),
-                    (V*)(value->tensor_data().data()),
-                    (bool*)exists->tensor_data().data(), len,
-                    (V*)(default_value.tensor_data().data()), stream,
-                    is_full_default);
+        try {
+          table_->get((const K*)d_keys.tensor_data().data(),
+                      (V*)(value->tensor_data().data()),
+                      (bool*)exists->tensor_data().data(), len,
+                      (V*)(default_value.tensor_data().data()), stream,
+                      is_full_default);
+          CUDA_CHECK(cudaStreamSynchronize(stream));
+        } catch (std::runtime_error& e) {
+          return Status(tensorflow::error::INTERNAL, e.what());
+        }
       }
-      CUDA_CHECK(cudaStreamSynchronize(stream));
     }
     return Status::OK();
   }
@@ -220,10 +228,14 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
     auto stream = ctx->eigen_device<GPUDevice>().stream();
     {
       mutex_lock l(mu_);
-      table_->upsert((const K*)keys.tensor_data().data(),
-                     (const V*)(values.tensor_data().data()), len, stream);
+      try {
+        table_->upsert((const K*)keys.tensor_data().data(),
+                       (const V*)(values.tensor_data().data()), len, stream);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+      } catch (std::runtime_error& e) {
+        return Status(tensorflow::error::INTERNAL, e.what());
+      }
     };
-    CUDA_CHECK(cudaStreamSynchronize(stream));
 
     return Status::OK();
   }
@@ -234,11 +246,15 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
     auto stream = ctx->eigen_device<GPUDevice>().stream();
     {
       mutex_lock l(mu_);
-      table_->accum((const K*)keys.tensor_data().data(),
-                    (const V*)(values_or_deltas.tensor_data().data()),
-                    (const bool*)exists.tensor_data().data(), len, stream);
-    };
-    CUDA_CHECK(cudaStreamSynchronize(stream));
+      try {
+        table_->accum((const K*)keys.tensor_data().data(),
+                      (const V*)(values_or_deltas.tensor_data().data()),
+                      (const bool*)exists.tensor_data().data(), len, stream);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+      } catch (std::runtime_error& e) {
+        return Status(tensorflow::error::INTERNAL, e.what());
+      }
+    }
 
     return Status::OK();
   }
@@ -295,10 +311,14 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
           sizeof(V) * runtime_dim_ * len, cudaMemcpyDefault, stream));
       {
         mutex_lock l(mu_);
-        table_->clear(stream);
-        table_->upsert((const K*)d_keys, (const V*)d_values, len, stream);
+        try {
+          table_->clear(stream);
+          table_->upsert((const K*)d_keys, (const V*)d_values, len, stream);
+          CUDA_CHECK(cudaStreamSynchronize(stream));
+        } catch (std::runtime_error& e) {
+          return Status(tensorflow::error::INTERNAL, e.what());
+        }
       }
-      CUDA_CHECK(cudaStreamSynchronize(stream));
       CUDA_CHECK(cudaFreeAsync(d_keys, stream));
       CUDA_CHECK(cudaFreeAsync(d_values, stream));
     }
@@ -322,8 +342,8 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
       tf_shared_lock l(mu_);
       len = table_->get_capacity();
       size = (int64)table_->get_size(stream);
+      CUDA_CHECK(cudaStreamSynchronize(stream));
     }
-    CUDA_CHECK(cudaStreamSynchronize(stream));
 
     CUDA_CHECK(cudaMallocAsync(&d_dump_counter, sizeof(size_t), stream));
     CUDA_CHECK(cudaMemsetAsync(d_dump_counter, 0, sizeof(size_t), stream));
@@ -339,8 +359,14 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
         "values", TensorShape({size, (int64)runtime_dim_}), &values, attr));
     if (size) {
       tf_shared_lock l(mu_);
-      table_->dump((K*)keys->flat<K>().data(), (V*)(values->matrix<V>().data()),
-                   offset, len, d_dump_counter, stream);
+      try {
+        table_->dump((K*)keys->flat<K>().data(),
+                     (V*)(values->matrix<V>().data()), offset, len,
+                     d_dump_counter, stream);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+      } catch (std::runtime_error& e) {
+        return Status(tensorflow::error::INTERNAL, e.what());
+      }
     }
     CUDA_CHECK(cudaFreeAsync(d_dump_counter, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -364,8 +390,8 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
       tf_shared_lock l(mu_);
       len = table_->get_capacity();
       size = (int64)table_->get_size(stream);
+      CUDA_CHECK(cudaStreamSynchronize(stream));
     }
-    CUDA_CHECK(cudaStreamSynchronize(stream));
 
     CUDA_CHECK(cudaMallocAsync(&d_dump_counter, sizeof(size_t), stream));
     CUDA_CHECK(cudaMemsetAsync(d_dump_counter, 0, sizeof(size_t), stream));
@@ -383,11 +409,15 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
         ctx->allocate_output("metas", TensorShape({(size)}), &metas, attr));
     if (size) {
       tf_shared_lock l(mu_);
-      table_->dump_with_metas((K*)keys->flat<K>().data(),
-                              (V*)(values->matrix<V>().data()),
-                              (uint64_t*)(metas->flat<V>().data()), offset, len,
-                              d_dump_counter, stream);
-      CUDA_CHECK(cudaStreamSynchronize(stream));
+      try {
+        table_->dump_with_metas((K*)keys->flat<K>().data(),
+                                (V*)(values->matrix<V>().data()),
+                                (uint64_t*)(metas->flat<V>().data()), offset,
+                                len, d_dump_counter, stream);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+      } catch (std::runtime_error& e) {
+        return Status(tensorflow::error::INTERNAL, e.what());
+      }
     }
     CUDA_CHECK(cudaFreeAsync(d_dump_counter, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -433,7 +463,11 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
 
     {
       tf_shared_lock l(mu_);
-      table_->dump_to_file(filepath, runtime_dim_, stream, buffer_size);
+      try {
+        table_->dump_to_file(filepath, runtime_dim_, stream, buffer_size);
+      } catch (std::runtime_error& e) {
+        return Status(tensorflow::error::INTERNAL, e.what());
+      }
     }
     CUDA_CHECK(cudaStreamSynchronize(stream));
     return Status::OK();
@@ -456,10 +490,14 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
       size_t size = static_cast<size_t>(filesize) / sizeof(K);
       fseek(tmpfd, 0, SEEK_SET);
       fclose(tmpfd);
-
-      table_->clear(stream);
-      CUDA_CHECK(cudaStreamSynchronize(stream));
-      table_->load_from_file(filepath, size, runtime_dim_, stream, buffer_size);
+      try {
+        table_->clear(stream);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        table_->load_from_file(filepath, size, runtime_dim_, stream,
+                               buffer_size);
+      } catch (std::runtime_error& e) {
+        return Status(tensorflow::error::INTERNAL, e.what());
+      }
     }
     CUDA_CHECK(cudaStreamSynchronize(stream));
     return Status::OK();

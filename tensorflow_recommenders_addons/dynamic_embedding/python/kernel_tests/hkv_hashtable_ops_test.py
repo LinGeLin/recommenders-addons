@@ -557,79 +557,64 @@ class HkvHashtableTest(test.TestCase):
         self.evaluate(table.clear())
         del table
 
-  # def test_reach_max_hbm(self):
-  #   id = 0
-  #   dim_list = [1, 2, 4, 8, 10, 16, 32, 64, 100, 200]
-  #   kv_list = [[dtypes.int64, dtypes.int8], [dtypes.int64, dtypes.int32],
-  #              [dtypes.int64, dtypes.int64], [dtypes.int64, dtypes.float32],
-  #              [dtypes.int64, dtypes.half]]
-  #   bits_list = [1, 4, 8, 4, 2]
+  def test_reach_max_hbm(self):
+    id = 0
+    dim_list = [1, 2, 4, 8, 10, 16, 32, 64, 100, 200]
+    kv_list = [[dtypes.int64, dtypes.int8], [dtypes.int64, dtypes.int32],
+               [dtypes.int64, dtypes.int64], [dtypes.int64, dtypes.float32],
+               [dtypes.int64, dtypes.half]]
+    bits_list = [1, 4, 8, 4, 2]
 
-  #   dim_list = [32]
-  #   kv_list = [[dtypes.int64, dtypes.int64]]
-  #   bits_list = [8]
+    dim_list = [32]
+    kv_list = [[dtypes.int64, dtypes.int64]]
+    bits_list = [8]
 
-  #   def _convert(v, t):
-  #     return np.array(v).astype(_type_converter(t))
+    def _convert(v, t):
+      return np.array(v).astype(_type_converter(t))
 
-  #   for (key_dtype, value_dtype), dim, bit in itertools.product(kv_list, dim_list, bits_list):
-  #     id += 1
-  #     with self.session(config=default_config, use_gpu=True) as sess:
-  #       hkv_table_config = de.HkvHashTableConfig(init_capacity=1024 * 1024 * 2,
-  #                                                max_capacity=1024 * 1024 * 2,
-  #                                                max_hbm_for_vectors= bit * (dim + 1) * 1024 * 1024 * 4)
-  #       table = de.get_variable(
-  #           't1-' + str(id) + '_test_variable',
-  #           key_dtype=key_dtype,
-  #           value_dtype=value_dtype,
-  #           initializer=np.array([-1]).astype(_type_converter(value_dtype)),
-  #           dim=dim,
-  #           kv_creator=de.HkvHashTableCreator(config=hkv_table_config))
-  #       table.clear()
-  #       keys = constant_op.constant(
-  #           np.array([x for x in range(1024 * 1024 * 2)]).astype(_type_converter(key_dtype)),
-  #           key_dtype)
-  #       values = constant_op.constant(
-  #           _convert([[x] * dim for x in range(1024 * 1024 * 2)], value_dtype), value_dtype)
+    k_key_num = 1024 * 1024 * 2
+    for (key_dtype,
+         value_dtype), dim, bit in itertools.product(kv_list, dim_list,
+                                                     bits_list):
+      id += 1
+      with self.session(config=default_config, use_gpu=True) as sess:
+        hkv_table_config = de.HkvHashTableConfig(init_capacity=k_key_num,
+                                                 max_capacity=k_key_num,
+                                                 max_hbm_for_vectors=bit *
+                                                 (dim + 1) * 1024 * 1024 * 4)
+        table = de.get_variable(
+            't1-' + str(id) + '_test_variable',
+            key_dtype=key_dtype,
+            value_dtype=value_dtype,
+            initializer=np.array([-1]).astype(_type_converter(value_dtype)),
+            dim=dim,
+            kv_creator=de.HkvHashTableCreator(config=hkv_table_config))
+        table.clear()
+        keys = constant_op.constant(
+            np.array([x for x in range(0, int(k_key_num / 2))
+                     ]).astype(_type_converter(key_dtype)), key_dtype)
+        values = constant_op.constant(
+            _convert([[x] * dim for x in range(0, int(k_key_num / 2))],
+                     value_dtype), value_dtype)
 
-  #       self.assertAllEqual(0, self.evaluate(table.size()))
+        self.assertAllEqual(0, self.evaluate(table.size()))
 
-  #       self.evaluate(table.upsert(keys, values))
-  #       self.assertAllEqual(1024 * 1024 * 2, self.evaluate(table.size()))
+        self.evaluate(table.upsert(keys, values))
+        self.assertAllEqual(k_key_num / 2, self.evaluate(table.size()))
 
-  # output = table.lookup(keys)
-  # self.assertAllEqual(values, self.evaluate(output))
+        keys = constant_op.constant(
+            np.array([x for x in range(int(k_key_num / 2), k_key_num)
+                     ]).astype(_type_converter(key_dtype)), key_dtype)
+        values = constant_op.constant(
+            _convert([[x] * dim for x in range(int(k_key_num / 2), k_key_num)],
+                     value_dtype), value_dtype)
 
-  # remove_keys = constant_op.constant(_convert([1, 5], key_dtype),
-  #                                    key_dtype)
+        self.evaluate(table.upsert(keys, values))
+        self.assertAllInRange(self.evaluate(table.size()), k_key_num / 2,
+                              k_key_num)
 
-  # self.evaluate(table.remove(remove_keys))
-
-  # self.assertAllEqual(3, self.evaluate(table.size()))
-
-  # remove_keys = constant_op.constant(_convert([0, 1, 5], key_dtype),
-  #                                    key_dtype)
-  # output = table.lookup(remove_keys)
-  # self.assertAllEqual([3, dim], output.get_shape())
-
-  # result = self.evaluate(output)
-  # self.assertAllEqual(
-  #     _convert([[0] * dim, [-1] * dim, [-1] * dim], value_dtype),
-  #     _convert(result, value_dtype))
-
-  # exported_keys, exported_values = table.export()
-
-  # # exported data is in the order of the internal map, i.e. undefined
-  # sorted_keys = np.sort(self.evaluate(exported_keys))
-  # sorted_values = np.sort(self.evaluate(exported_values), axis=0)
-  # self.assertAllEqual(_convert([0, 2, 3], key_dtype),
-  #                     _convert(sorted_keys, key_dtype))
-  # self.assertAllEqual(
-  #     _convert([[0] * dim, [2] * dim, [3] * dim], value_dtype),
-  #     _convert(sorted_values, value_dtype))
-
-  # self.evaluate(table.clear())
-  # del table
+        self.evaluate(table.clear())
+        del table
 
 
 if __name__ == "__main__":

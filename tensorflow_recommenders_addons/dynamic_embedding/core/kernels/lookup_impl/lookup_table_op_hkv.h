@@ -164,12 +164,13 @@ class TableWrapper {
  private:
   //using M = uint64_t;
   using Table = nv::merlin::HashTable<K, V, uint64_t>;
+  nv::merlin::HashTableOptions mkv_options;
 
  public:
   TableWrapper(TableWrapperInitOptions& init_options, size_t dim) {
     max_capacity_ = init_options.max_capacity;
     dim_ = dim;
-    nv::merlin::HashTableOptions mkv_options;
+    // nv::merlin::HashTableOptions mkv_options;
     mkv_options.init_capacity = std::min(init_options.init_capacity, max_capacity_);
     mkv_options.max_capacity = max_capacity_;
     // Since currently GPU nodes are not compatible to fast
@@ -183,7 +184,17 @@ class TableWrapper {
     mkv_options.evict_strategy = nv::merlin::EvictStrategy::kCustomized;
     block_size_ = mkv_options.block_size;
     table_ = new Table();
-    table_->init(mkv_options);
+
+  }
+
+  Status init() {
+    try {
+      table_->init(mkv_options);
+    } catch(std::runtime_error& e)
+    {
+      return Status(tensorflow::error::INTERNAL, e.what());
+    }
+    return Status::OK();
   }
 
   ~TableWrapper() { delete table_; }
@@ -370,9 +381,10 @@ class TableWrapper {
 };
 
 template <class K, class V>
-void CreateTableImpl(TableWrapper<K, V>** pptable, TableWrapperInitOptions& options,
+Status CreateTableImpl(TableWrapper<K, V>** pptable, TableWrapperInitOptions& options,
                      size_t runtime_dim) {
   *pptable = new TableWrapper<K, V>(options, runtime_dim);
+  return (*pptable)->init();
 }
 
 }  // namespace gpu

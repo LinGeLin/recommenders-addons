@@ -295,20 +295,30 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
     size_t len = keys.flat<K>().size();
     K* d_keys;
     V* d_values;
-    auto stream = ctx->eigen_device<GPUDevice>().stream();
     if (len > 0) {
-      CUDA_CHECK(cudaMallocAsync((void**)&d_keys, sizeof(K) * len, stream));
-      CUDA_CHECK(cudaMemsetAsync((void*)&d_keys, 0, sizeof(K) * len, stream));
-      CUDA_CHECK(cudaMallocAsync((void**)&d_values,
-                                 sizeof(V) * runtime_dim_ * len, stream));
-      CUDA_CHECK(cudaMemsetAsync((void*)&d_values, 0,
-                                 sizeof(V) * runtime_dim_ * len, stream));
-      CUDA_CHECK(cudaMemcpyAsync((void*)d_keys,
-                                 (void*)keys.tensor_data().data(),
-                                 sizeof(K) * len, cudaMemcpyDefault, stream));
-      CUDA_CHECK(cudaMemcpyAsync(
-          (void*)d_values, (void*)values.tensor_data().data(),
-          sizeof(V) * runtime_dim_ * len, cudaMemcpyDefault, stream));
+      auto stream = ctx->eigen_device<GPUDevice>().stream();
+      cudaPointerAttributes keys_attr;
+      CUDA_CHECK(cudaPointerGetAttributes(&keys_attr,
+                                          (void*)keys.tensor_data().data()));
+      if (keys_attr.type != cudaMemoryTypeDevice) {
+        CUDA_CHECK(cudaMallocManaged((void**)&d_keys, sizeof(K) * len));
+        CUDA_CHECK(cudaMemcpy((void*)d_keys, (void*)keys.tensor_data().data(),
+                              sizeof(K) * len, cudaMemcpyDefault));
+      } else {
+        d_keys = (K*)keys.tensor_data().data();
+      }
+      cudaPointerAttributes values_attr;
+      CUDA_CHECK(cudaPointerGetAttributes(&values_attr,
+                                          (void*)values.tensor_data().data()));
+      if (values_attr.type != cudaMemoryTypeDevice) {
+        CUDA_CHECK(cudaMallocManaged((void**)&d_values,
+                                     sizeof(V) * runtime_dim_ * len));
+        CUDA_CHECK(
+            cudaMemcpy((void*)d_values, (void*)values.tensor_data().data(),
+                       sizeof(V) * runtime_dim_ * len, cudaMemcpyDefault));
+      } else {
+        d_values = (V*)values.tensor_data().data();
+      }
       {
         mutex_lock l(mu_);
         try {
@@ -319,11 +329,14 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
           return Status(tensorflow::error::INTERNAL, e.what());
         }
       }
-      CUDA_CHECK(cudaFreeAsync(d_keys, stream));
-      CUDA_CHECK(cudaFreeAsync(d_values, stream));
+      if (keys_attr.type != cudaMemoryTypeDevice) {
+        CUDA_CHECK(cudaFree(d_keys));
+      }
+      if (values_attr.type != cudaMemoryTypeDevice) {
+        CUDA_CHECK(cudaFree(d_values));
+      }
     }
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    return Status::OK();
+    return TFOkStatus;
   }
 
   Status ExportValues(OpKernelContext* ctx) override {

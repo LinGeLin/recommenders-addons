@@ -17,7 +17,6 @@ on:
 env:
   MIN_PY_VERSION: '3.7'
   MAX_PY_VERSION: '3.9'
-  USE_BAZEL_VERSION: "5.1.1"
   HOROVOD_VERSION: '0.23.0'
 
 jobs:
@@ -64,6 +63,8 @@ jobs:
             tf-need-cuda: '1'
       fail-fast: false
     steps:
+      - name: clear cache folder
+        run: rm -rf /usr/share/dotnet /opt/ghc "/usr/local/share/boost"
       - uses: actions/github-script@0.3.0
         id: author-date
         with:

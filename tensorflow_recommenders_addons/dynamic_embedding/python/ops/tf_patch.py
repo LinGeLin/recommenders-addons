@@ -14,9 +14,6 @@
 
 # lint-as: python3
 """patch on tensorflow"""
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
 from tensorflow_recommenders_addons import dynamic_embedding as de
 from tensorflow_recommenders_addons import embedding_variable as ev
@@ -57,11 +54,14 @@ from tensorflow.python.platform import tf_logging
 from tensorflow.python.training import device_setter
 from tensorflow.python.training import optimizer
 from tensorflow.python.training import slot_creator
-from tensorflow.python.training.tracking import base
+try:  # tf version >= 2.10.0
+  from tensorflow.python.checkpoint import restore as ckpt_base
+except:
+  from tensorflow.python.training.tracking import base as ckpt_base
 
 _PARTITION_SHAPE = 'partition_shape'
 
-tf_checkpoint_position_bind_object = base.CheckpointPosition.bind_object
+tf_checkpoint_position_bind_object = ckpt_base.CheckpointPosition.bind_object
 
 
 class _DenseDynamicEmbeddingTrainableProcessor(optimizer._OptimizableVariable):
@@ -384,4 +384,4 @@ def patch_on_tf():
     kinit_tf.VarianceScaling.__call__ = __call__for_keras_init_v2
   if kinit_K is not None:
     kinit_K.VarianceScaling.__call__ = __call__for_keras_init_v2
-  base.CheckpointPosition.bind_object = bind_object
+  ckpt_base.CheckpointPosition.bind_object = bind_object

@@ -26,6 +26,7 @@ __all__ = [
     'RedisTableCreator',
     'Variable',
     'TrainableWrapper',
+    'DistributedVariableWrapper',
     'DynamicEmbeddingOptimizer',
     'GraphKeys',
     'ModelMode',
@@ -40,13 +41,16 @@ __all__ = [
     'enable_inference_mode',
     'enable_train_mode',
     'get_model_mode',
+    'trainable_wrapper_filter',
     'keras',
     'math',
+    'data_flow',
     'shadow_ops',
 ]
 
 from tensorflow_recommenders_addons.dynamic_embedding.python import keras
 from tensorflow_recommenders_addons.dynamic_embedding.python.ops import math_ops as math
+from tensorflow_recommenders_addons.dynamic_embedding.python.ops import data_flow_ops as data_flow
 from tensorflow_recommenders_addons.dynamic_embedding.python.ops.dynamic_embedding_creator import (
     KVCreator, CuckooHashTableConfig, CuckooHashTableCreator, HkvHashTableConfig, HkvHashTableCreator, RedisTableConfig,
     RedisTableCreator, FileSystemSaver)
@@ -71,9 +75,13 @@ from tensorflow_recommenders_addons.dynamic_embedding.python.ops.dynamic_embeddi
 from tensorflow_recommenders_addons.dynamic_embedding.python.ops.dynamic_embedding_ops import (
     get_model_mode,)
 from tensorflow_recommenders_addons.dynamic_embedding.python.ops.dynamic_embedding_ops import (
+    trainable_wrapper_filter,)
+from tensorflow_recommenders_addons.dynamic_embedding.python.ops.dynamic_embedding_ops import (
     ModelMode,)
 from tensorflow_recommenders_addons.dynamic_embedding.python.ops.dynamic_embedding_ops import (
     TrainableWrapper,)
+from tensorflow_recommenders_addons.dynamic_embedding.python.ops.dynamic_embedding_ops import (
+    DistributedVariableWrapper,)
 from tensorflow_recommenders_addons.dynamic_embedding.python.ops.dynamic_embedding_optimizer import (
     create_slots,)
 from tensorflow_recommenders_addons.dynamic_embedding.python.ops.dynamic_embedding_optimizer import (

@@ -18,10 +18,6 @@ Dynamic Embedding is designed for Large-scale Sparse Weights Training.
 See [Sparse Domain Isolation](https://github.com/tensorflow/community/pull/237)
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import functools
 import re
 import typing
@@ -50,6 +46,7 @@ from tensorflow.python.eager import def_function
 from tensorflow.python.framework import constant_op
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import ops
+from tensorflow.python.framework import versions
 from tensorflow.python.keras.optimizer_v2.optimizer_v2 import OptimizerV2
 from tensorflow.python.keras.utils import tf_utils
 from tensorflow.python.ops import array_ops
@@ -70,13 +67,23 @@ from tensorflow.python.ops import tensor_array_ops
 from tensorflow.python.ops import variable_scope
 from tensorflow.python.platform import tf_logging
 from tensorflow.python.training.optimizer import Optimizer
+try:  # tf version >= 2.10.0
+  from tensorflow.python.trackable import base
+except:
+  from tensorflow.python.training.tracking import base
+try:  # tf version >= 2.10.0
+  from tensorflow.python.training.saving.saveable_object_util import _PythonStringStateSaveable as TF_PythonStringStateSaveable
+except:
+  from tensorflow.python.training.tracking.base import PythonStringStateSaveable as TF_PythonStringStateSaveable
 from tensorflow.python.training.tracking import base
 from tensorflow.python.training.tracking import data_structures
 from tensorflow.python.training.tracking import python_state
 from tensorflow.python.util.tf_export import tf_export
 
+from tensorflow.python.distribute import distribution_strategy_context as distribute_ctx
 
-def make_partition(data, partition_index, shard_num):
+
+def make_partition(data, partition_index, shard_num, name=None):
   """
   Shard keys to shard_num partitions
 
@@ -92,21 +99,21 @@ def make_partition(data, partition_index, shard_num):
         data,
     ], None
   with ops.colocate_with(data, ignore_existing=True):
-    partitions = data_flow_ops.dynamic_partition(data, partition_index,
-                                                 shard_num)
-    indices = data_flow_ops.dynamic_partition(
-        math_ops.range(array_ops.shape(data)[0]),
-        math_ops.cast(partition_index, dtypes.int32),
-        shard_num,
-    )
+    with ops.name_scope("data_partitions"):
+      partitions = de.data_flow.dynamic_partition(data, partition_index,
+                                                  shard_num, name)
+    with ops.name_scope("make_indices"):
+      indices = de.data_flow.dynamic_partition(
+          math_ops.range(array_ops.shape(data)[0]), partition_index, shard_num,
+          name)
   return partitions, indices
 
 
-def _stitch(values, indices):
+def _stitch(values, indices, use_fast=True, name=None):
   if len(values) == 1:
     return values[0]
   with ops.colocate_with(indices[0], ignore_existing=True):
-    all_values = data_flow_ops.dynamic_stitch(indices, values)
+    all_values = de.data_flow.dynamic_stitch(indices, values, use_fast, name)
   return all_values
 
 
@@ -120,6 +127,9 @@ def default_partition_fn(keys, shard_num):
     a tensor with same shape as keys with type of `tf.int32`,
       represents the corresponding partition-ids of keys.
   """
+  if shard_num <= 1:
+    return array_ops.zeros(shape=array_ops.shape(keys), dtype=dtypes.int32)
+
   keys_op = ops.convert_to_tensor(keys, name="keys")
   gpu_mode = pywrap.IsGoogleCudaEnabled()
 
@@ -532,6 +542,7 @@ class Variable(base.Trackable):
                           overwrite=True)
     self.size_ops = []
     self._trainable_store = {}
+    self._distribute_trainable_store = {}
     self.kv_creator = kv_creator if kv_creator else de.CuckooHashTableCreator()
     self._saveable_object_creator = self.kv_creator.saver
 
@@ -888,9 +899,10 @@ class Variable(base.Trackable):
           _values.append(ops_)
 
     if return_exists:
-      result = (_stitch(_values, keys_indices), _stitch(_exists, keys_indices))
+      result = (_stitch(_values, keys_indices, use_fast=True),
+                _stitch(_exists, keys_indices, use_fast=True))
     else:
-      result = _stitch(_values, keys_indices)
+      result = _stitch(_values, keys_indices, use_fast=True)
     return result
 
   def export(self, name=None):
@@ -1061,14 +1073,22 @@ class Variable(base.Trackable):
                       (Optimizer, OptimizerV2, tf.keras.optimizers.Optimizer)):
       raise TypeError('Expect an optimizer, but get {}'.format(type(optimizer)))
     slots = []
-    snames = optimizer.get_slot_names()
-    for tw in self._trainable_store.values():
-      for name in snames:
-        try:
-          s = optimizer.get_slot(tw, name)
-          slots.append(s.params)
-        except:
-          continue
+    if hasattr(optimizer, 'get_slot_names'):
+      snames = optimizer.get_slot_names()
+      for tw in self._trainable_store.values():
+        for name in snames:
+          try:
+            s = optimizer.get_slot(tw, name)
+            slots.append(s.params)
+          except:
+            continue
+    else:
+      for tw in self._trainable_store.values():
+        for s in optimizer._variables:
+          try:
+            slots.append(s.params)
+          except:
+            continue
     return slots
 
   def get_trainable_by_name(self, name):
@@ -1126,7 +1146,7 @@ class Variable(base.Trackable):
     if context.executing_eagerly() or g._functions:
       saveables = dict()
       saveables["py_state_de_var"] = functools.partial(
-          base.PythonStringStateSaveable,
+          TF_PythonStringStateSaveable,
           name=self.name,
           state_callback=lambda: self.name,
           restore_callback=lambda name: None)

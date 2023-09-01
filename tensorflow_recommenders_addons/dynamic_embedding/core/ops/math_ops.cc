@@ -49,7 +49,7 @@ Status SparseSegmentReductionShapeFn(InferenceContext* c) {
   TF_RETURN_IF_ERROR(
       c->Concatenate(c->Vector(InferenceContext::kUnknownDim), subshape, &out));
   c->set_output(0, out);
-  return Status::OK();
+  return TFOkStatus;
 }
 
 Status SparseSegmentReductionWithNumSegmentsShapeFn(InferenceContext* c) {
@@ -88,7 +88,7 @@ Status SparseSegmentReductionWithNumSegmentsShapeFn(InferenceContext* c) {
     TF_RETURN_IF_ERROR(c->Concatenate(c->Vector(dim0_value), subshape, &out));
   }
   c->set_output(0, out);
-  return Status::OK();
+  return TFOkStatus;
 }
 }  // namespace
 
@@ -153,28 +153,9 @@ REGISTER_OP("TfraSparseFillEmptyRows")
       c->set_output(1, output_values);
       c->set_output(2, empty_row_indicator);
       c->set_output(3, reverse_index_map);
-      return Status::OK();
+      return TFOkStatus;
     });
 
-REGISTER_OP("TfraSparseReshape")
-    .Input("input_indices: int64")
-    .Input("input_shape: int64")
-    .Input("new_shape: int64")
-    .Output("output_indices: int64")
-    .Output("output_shape: int64")
-    .SetShapeFn([](InferenceContext* c) {
-      ShapeHandle indices;
-      ShapeHandle unused;
-      ShapeHandle new_shape;
-
-      TF_RETURN_IF_ERROR(c->WithRank(c->input(0), 2, &indices));
-      TF_RETURN_IF_ERROR(c->WithRank(c->input(1), 1, &unused));
-      TF_RETURN_IF_ERROR(c->WithRank(c->input(2), 1, &new_shape));
-
-      c->set_output(0, c->Matrix(c->Dim(indices, 0), c->Dim(new_shape, 0)));
-      c->set_output(1, new_shape);
-      return Status::OK();
-    });
 #endif  // GOOGLE_CUDA
 
 }  // namespace tensorflow

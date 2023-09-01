@@ -87,9 +87,6 @@ WORKDIR /tmp/
 COPY install/install_nccl.sh /install/
 RUN /install/install_nccl.sh "2.8.4-1+cuda11.2"
 
-COPY install/install_rocksdb.sh /install/
-RUN /install/install_rocksdb.sh "6.22.1"
-
 COPY install/install_bazel.sh /install/
 RUN /install/install_bazel.sh "5.1.1"
 
@@ -97,10 +94,8 @@ COPY install/build_and_install_python.sh /install/
 RUN /install/build_and_install_python.sh "3.7.7"
 RUN /install/build_and_install_python.sh "3.8.2"
 RUN /install/build_and_install_python.sh "3.9.7"
-RUN /install/build_and_install_python.sh "3.10.6"
 
 COPY install/install_pip_packages_by_version.sh /install/
-RUN /install/install_pip_packages_by_version.sh "/usr/local/bin/pip3.10"
 RUN /install/install_pip_packages_by_version.sh "/usr/local/bin/pip3.9"
 RUN /install/install_pip_packages_by_version.sh "/usr/local/bin/pip3.8"
 RUN /install/install_pip_packages_by_version.sh "/usr/local/bin/pip3.7"

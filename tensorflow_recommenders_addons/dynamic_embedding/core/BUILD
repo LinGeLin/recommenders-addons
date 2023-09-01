@@ -78,8 +78,6 @@ custom_op_library(
         "kernels/segment_reduction_ops_impl.h",
         "kernels/sparse_fill_empty_rows_op.cc",
         "kernels/sparse_fill_empty_rows_op.h",
-        "kernels/sparse_reshape_op.cc",
-        "kernels/sparse_reshape_op.h",
         "ops/math_ops.cc",
         "utils/utils.h",
     ],
@@ -93,8 +91,27 @@ custom_op_library(
         "kernels/segment_reduction_ops_gpu.cu.cc",
         "kernels/sparse_fill_empty_rows_op.h",
         "kernels/sparse_fill_empty_rows_op.cu.cc",
-        "kernels/sparse_reshape_op.h",
-        "kernels/sparse_reshape_op.cu.cc",
+    ],
+)
+
+custom_op_library(
+    name = "_data_flow_ops.so",
+    srcs = [
+        "kernels/dynamic_partition_op.cc",
+        "kernels/dynamic_stitch_op.cc",
+        "ops/data_flow_ops.cc",
+        "utils/utils.h",
+    ],
+    cuda_deps = if_cuda_for_tf_serving(
+        ["//tensorflow_recommenders_addons/dynamic_embedding/core/lib/nvhash:nvhashtable"],
+        [],
+        FOR_TF_SERVING,
+    ),
+    cuda_srcs = [
+        "kernels/fill_functor.cu.cc",
+        "kernels/dynamic_partition_op_gpu.cu.cc",
+        "kernels/dynamic_stitch_op_gpu.cu.cc",
+        "utils/utils.h",
     ],
 )
 

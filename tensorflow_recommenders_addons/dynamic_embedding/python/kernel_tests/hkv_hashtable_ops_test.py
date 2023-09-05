@@ -282,6 +282,8 @@ class HkvHashtableTest(test.TestCase):
         np_values = self.evaluate(init_values)
 
         dirpath = "/tmp/test_local_file_system/tfra_embedding"
+        if not os.path.exists("/tmp/test_local_file_system"):
+          os.mkdir("/tmp/test_local_file_system")
         self.evaluate(var1.tables[0].save(dirpath, buffer_size=4096))
         self.evaluate(var2.tables[0].load(dirpath, buffer_size=4096))
 

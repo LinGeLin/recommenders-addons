@@ -126,7 +126,7 @@ custom_op_library(
         "-Ofast",
     ],
     cuda_deps = if_cuda_for_tf_serving(
-        ["//tensorflow_recommenders_addons/dynamic_embedding/core/lib/merlin_inc:merlin_kv"],
+        ["@hkv//:hkv"],
         [],
         FOR_TF_SERVING,
     ),

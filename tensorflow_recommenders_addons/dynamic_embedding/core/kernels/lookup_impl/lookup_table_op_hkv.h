@@ -35,10 +35,10 @@ limitations under the License.
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/platform/macros.h"
 #include "tensorflow/core/platform/thread_annotations.h"
-#include "tensorflow_recommenders_addons/dynamic_embedding/core/lib/merlin_inc/merlin_hashtable.cuh"
-#include "tensorflow_recommenders_addons/dynamic_embedding/core/lib/merlin_inc/merlin_localfile.hpp"
-#include "tensorflow_recommenders_addons/dynamic_embedding/core/lib/merlin_inc/merlin/types.cuh"
-#include "tensorflow_recommenders_addons/dynamic_embedding/core/lib/merlin_inc/merlin/utils.cuh"
+#include "merlin_hashtable.cuh"
+#include "merlin_localfile.hpp"
+#include "merlin/types.cuh"
+#include "merlin/utils.cuh"
 
 namespace tensorflow {
 namespace recommenders_addons {
@@ -222,7 +222,7 @@ class TableWrapper {
     broadcast_kernel<uint64_t><<<grid_size, block_size_, 0, stream>>>(timestamp_metas, t0, len);
     table_->accum_or_assign(len, d_keys, d_vals_or_deltas, d_exists, /*d_metas=*/timestamp_metas, stream);
     CUDA_CHECK(cudaFreeAsync(timestamp_metas, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream))
+    CUDA_CHECK(cudaStreamSynchronize(stream));
   }
 
   void dump(K* d_key, V* d_val, const size_t offset,

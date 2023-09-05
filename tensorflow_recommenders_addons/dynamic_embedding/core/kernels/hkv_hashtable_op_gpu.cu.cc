@@ -336,7 +336,7 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
         CUDA_CHECK(cudaFree(d_values));
       }
     }
-    return TFOkStatus;
+    return Status::OK();
   }
 
   Status ExportValues(OpKernelContext* ctx) override {

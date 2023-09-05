@@ -54,6 +54,14 @@ http_archive(
     url = "https://github.com/sewenew/redis-plus-plus/archive/refs/tags/1.2.3.zip",
 )
 
+http_archive(
+    name = "hkv",
+    build_file = "//build_deps/toolchains/hkv:hkv.BUILD",
+    sha256 = "f8179c445a06a558262946cda4d8ae7252d313e73f792586be9b1bc0c993b1cf",
+    strip_prefix = "HierarchicalKV-0.1.0-beta.6",
+    url = "https://github.com/NVIDIA-Merlin/HierarchicalKV/archive/refs/tags/v0.1.0-beta.6.tar.gz",
+)
+
 tf_configure(
     name = "local_config_tf",
 )

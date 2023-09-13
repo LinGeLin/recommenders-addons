@@ -876,6 +876,125 @@ class HashTableImportFromFileGpuOp : public OpKernel {
   size_t buffer_size_;
 };
 
+// Op that export all keys and values to FileSystem.
+template <class K, class V>
+class HashTableSaveToFileSystemGpuOp : public OpKernel {
+ public:
+  explicit HashTableSaveToFileSystemGpuOp(OpKernelConstruction* ctx)
+      : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("dirpath_env", &dirpath_env_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("append_to_file", &append_to_file_));
+    int64 signed_buffer_size = 0;
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("buffer_size", &signed_buffer_size));
+    buffer_size_ = static_cast<size_t>(signed_buffer_size);
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    lookup::LookupInterface* table;
+    OP_REQUIRES_OK(ctx, GetLookupTable("table_handle", ctx, &table));
+    core::ScopedUnref unref_me(table);
+
+    string dirpath;
+    TF_CHECK_OK(ReadStringFromEnvVar(dirpath_env_, "NotFound", &dirpath));
+    if (dirpath != "NotFound") {
+      LOG(INFO) << "Read TFRA key/value file directory path from the "
+                   "environment variable "
+                << dirpath_env_ << " successfully. Saving directory path is "
+                << dirpath;
+    } else {
+      const Tensor& dir_tensor = ctx->input(1);
+      OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(dir_tensor.shape()),
+                  errors::InvalidArgument("directory path must be scalar."));
+      dirpath = string(dir_tensor.scalar<tstring>()().data());
+    }
+
+    const Tensor& fname_tensor = ctx->input(2);
+    OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(fname_tensor.shape()),
+                errors::InvalidArgument("file name must be scalar."));
+    string file_name = string(fname_tensor.scalar<tstring>()().data());
+
+    lookup::HkvHashTableOfTensorsGpu<K, V>* table_hkv =
+        (lookup::HkvHashTableOfTensorsGpu<K, V>*)table;
+    LOG(INFO) << "c++ dirpath :" << dirpath << "filename: " << file_name;
+    std::string filepath = io::JoinPath(dirpath, file_name);
+    FileSystem* fs;
+    const auto env = ctx->env();
+    OP_REQUIRES_OK(ctx,
+        env->GetFileSystemForFile(filepath, &fs));
+    OP_REQUIRES_OK(ctx,
+        fs->RecursivelyCreateDir(std::string(fs->Dirname(filepath))));
+    
+    OP_REQUIRES_OK(
+        ctx, table_hkv->ExportValuesToFile(ctx, filepath,
+                                            buffer_size_));
+  }
+
+ private:
+  string dirpath_env_;
+  bool append_to_file_;
+  size_t buffer_size_;
+};
+
+// Clear the table and insert data from FileSystem.
+template <class K, class V>
+class HashTableLoadFromFileSystemGpuOp : public OpKernel {
+ public:
+  explicit HashTableLoadFromFileSystemGpuOp(OpKernelConstruction* ctx)
+      : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("dirpath_env", &dirpath_env_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("load_entire_dir", &load_entire_dir_));
+    int64 signed_buffer_size = 0;
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("buffer_size", &signed_buffer_size));
+    buffer_size_ = static_cast<size_t>(signed_buffer_size);
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    lookup::LookupInterface* table;
+    OP_REQUIRES_OK(ctx, GetLookupTable("table_handle", ctx, &table));
+    core::ScopedUnref unref_me(table);
+
+    string dirpath;
+    TF_CHECK_OK(ReadStringFromEnvVar(dirpath_env_, "NotFound", &dirpath));
+    if (dirpath != "NotFound") {
+      LOG(INFO) << "Read TFRA key/value file directory path from the "
+                   "environment variable "
+                << dirpath_env_ << " successfully. Saving directory path is "
+                << dirpath;
+    } else {
+      const Tensor& dir_tensor = ctx->input(1);
+      OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(dir_tensor.shape()),
+                  errors::InvalidArgument("directory path must be scalar."));
+      dirpath = string(dir_tensor.scalar<tstring>()().data());
+    }
+
+    const Tensor& fname_tensor = ctx->input(2);
+    OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(fname_tensor.shape()),
+                errors::InvalidArgument("file name must be scalar."));
+    string file_name = string(fname_tensor.scalar<tstring>()().data());
+
+    LOG(INFO) << "c++ dirpath :" << dirpath << "filename: " << file_name;
+    std::string filepath = io::JoinPath(dirpath, file_name);
+    FileSystem* fs;
+    const auto env = ctx->env();
+    OP_REQUIRES_OK(ctx,
+        env->GetFileSystemForFile(filepath, &fs));
+    OP_REQUIRES_OK(ctx,
+        fs->RecursivelyCreateDir(std::string(fs->Dirname(filepath))));
+    
+
+    lookup::HkvHashTableOfTensorsGpu<K, V>* table_hkv =
+        (lookup::HkvHashTableOfTensorsGpu<K, V>*)table;
+    OP_REQUIRES_OK(
+        ctx, table_hkv->ImportValuesFromFile(ctx, filepath,
+                                              buffer_size_));
+  }
+
+ private:
+  string dirpath_env_;
+  bool load_entire_dir_;
+  size_t buffer_size_;
+};
+
 // Register the HkvHashTableOfTensors op.
 #define REGISTER_KERNEL(key_dtype, value_dtype)                                \
   REGISTER_KERNEL_BUILDER(                                                     \
@@ -924,13 +1043,26 @@ class HashTableImportFromFileGpuOp : public OpKernel {
           .Device(DEVICE_GPU)                                                  \
           .TypeConstraint<key_dtype>("Tin")                                    \
           .TypeConstraint<value_dtype>("Tout"),                                \
-      HashTableFindWithExistsGpuOp<key_dtype, value_dtype>);
+      HashTableFindWithExistsGpuOp<key_dtype, value_dtype>);                   \
+  REGISTER_KERNEL_BUILDER(                                                     \
+      Name(PREFIX_OP_NAME(HkvHashTableSaveToFileSystem))                       \
+          .Device(DEVICE_GPU)                                                  \
+          .TypeConstraint<key_dtype>("key_dtype")                              \
+          .TypeConstraint<value_dtype>("value_dtype"),                         \
+      HashTableSaveToFileSystemGpuOp<key_dtype, value_dtype>);                 \
+  REGISTER_KERNEL_BUILDER(                                                     \
+      Name(PREFIX_OP_NAME(HkvHashTableLoadFromFileSystem))                     \
+          .Device(DEVICE_GPU)                                                  \
+          .TypeConstraint<key_dtype>("key_dtype")                              \
+          .TypeConstraint<value_dtype>("value_dtype"),                         \
+      HashTableLoadFromFileSystemGpuOp<key_dtype, value_dtype>);
 
 REGISTER_KERNEL(int64, float);
 REGISTER_KERNEL(int64, int8);
 REGISTER_KERNEL(int64, int32);
 REGISTER_KERNEL(int64, int64);
 REGISTER_KERNEL(int64, Eigen::half);
+
 
 #undef REGISTER_KERNEL
 

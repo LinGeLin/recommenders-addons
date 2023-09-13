@@ -174,6 +174,7 @@ class HkvHashTableCreator(KVCreator):
     self.max_capacity = KHkvHashTableMaxCapacity
     self.max_hbm_for_vectors = KHkvHashTableMaxHbmForVectors
     if self.config and isinstance(self.config, de.HkvHashTableConfig):
+      self.init_capacity = self.config.init_capacity
       self.max_capacity = self.config.max_capacity
       self.max_hbm_for_vectors = self.config.max_hbm_for_vectors
     self.device = device
@@ -187,7 +188,9 @@ class HkvHashTableCreator(KVCreator):
                            init_capacity=self.init_capacity,
                            max_capacity=self.max_capacity,
                            max_hbm_for_vectors=self.max_hbm_for_vectors,
-                           config=self.config)
+                           config=self.config,
+                           device=self.device,
+                           shard_saveable_object_fn=self.shard_saveable_object_fn)
 
   def get_config(self):
     if not context.executing_eagerly():

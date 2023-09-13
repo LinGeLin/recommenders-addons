@@ -266,34 +266,47 @@ class TableWrapper {
     CUDA_CHECK(cudaStreamSynchronize(stream));
   }
 
+  // TODO (LinGeLin) support metas
+  bool is_valid_metas(const std::string& keyfile, const std::string& metafile) const {
+    return false;
+  }
+
   void dump_to_file(const string filepath, size_t dim,
                     cudaStream_t stream,
                     const size_t buffer_size) const {
     LOG(INFO) << "dump_to_file, filepath: " << filepath << ", dim: " << dim
               << ", stream: " << stream << ", buffer_size: " << buffer_size;
-    std::unique_ptr<nv::merlin::LocalKVFile<K, V, uint64_t>> wfile;
+    std::unique_ptr<nv::merlin::BaseKVFile<K, V, uint64_t>> wfile;
     string keyfile = filepath + "-keys";
     string valuefile = filepath + "-values";
     string metafile = filepath + "-metas";
+    bool has_metas = false;
+    bool open_ok = false;
 
-    wfile.reset(new nv::merlin::LocalKVFile<K, V, uint64_t>);
-    bool open_ok = wfile->open(keyfile, valuefile, metafile, "wb");
+    if (is_valid_metas(keyfile, metafile)) {
+      wfile.reset(new nv::merlin::LocalKVFile<K, V, uint64_t>);
+      open_ok = reinterpret_cast<nv::merlin::LocalKVFile<K, V, uint64_t>*>(wfile.get())->open(keyfile, valuefile, metafile, "wb");
+      has_metas = true;
+    } else {
+      wfile.reset(new KVOnlyFile<K, V, uint64_t>);
+      open_ok = reinterpret_cast<KVOnlyFile<K, V, uint64_t>*>(wfile.get())->open(keyfile, valuefile, "wb");
+    }
     if (!open_ok) {
       std::string error_msg = "Failed to dump to file to " + keyfile + ", " + valuefile + ", " + metafile;
       throw std::runtime_error(error_msg);
     }
 
     size_t n_saved = table_->save(wfile.get(), buffer_size, stream);
-    LOG(INFO) << "[op] Save " << n_saved << " pairs into keyfile: "
-              << keyfile << ", and valuefile: " << valuefile
-              << ", and metafile: " << metafile;
+    if (has_metas) {
+      LOG(INFO) << "[op] Load " << n_saved << " pairs from keyfile: "
+                << keyfile << ", and valuefile: " << valuefile
+                << ", and metafile" << metafile;
+    } else {
+      LOG(INFO) << "[op] Load " << n_saved << " pairs from keyfile: "
+                << keyfile << ", and valuefile: " << valuefile;
+    }
     CUDA_CHECK(cudaStreamSynchronize(stream));
-    wfile->close();
-  }
-
-  // TODO (LinGeLin) support metas
-  bool is_valid_metas(const std::string& keyfile, const std::string& metafile) {
-    return false;
+    // wfile->close();
   }
 
   void load_from_file(const string filepath,

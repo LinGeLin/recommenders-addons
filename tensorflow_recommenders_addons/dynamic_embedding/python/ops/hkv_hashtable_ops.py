@@ -71,8 +71,8 @@ class HkvHashTable(LookupInterface):
       max_capacity=KHkvHashTableMaxCapacity,
       max_hbm_for_vectors=KHkvHashTableMaxHbmForVectors,
       config=None,
-      slot_hook=None,
-      is_slot=False,
+      device='',
+      shard_saveable_object_fn=None,
   ):
     """Creates an empty `HkvHashTable` object.
 
@@ -109,6 +109,7 @@ class HkvHashTable(LookupInterface):
     self._max_hbm_for_vectors = max_hbm_for_vectors
     self._name = name
     self._config = config
+    self._device = device
     self._new_obj_trackable = None
 
     if self._config:
@@ -130,14 +131,22 @@ class HkvHashTable(LookupInterface):
     if checkpoint:
       _ = HkvHashTable._Saveable(self, name)
       if not context.executing_eagerly():
-        self.saveable = HkvHashTable._Saveable(
-            self,
-            name=self._resource_handle.op.name,
-            full_name=self._resource_handle.op.name,
-        )
-        ops.add_to_collection(ops.GraphKeys.SAVEABLE_OBJECTS, self.saveable)
+        _table_name = self._resource_handle.op.name
+        _table_full_name = self._resource_handle.op.name
       else:
-        self.saveable = HkvHashTable._Saveable(self, name=name, full_name=name)
+        _table_name = self._name
+        _table_full_name = self._name
+      if shard_saveable_object_fn:
+        self._saveable_fn = shard_saveable_object_fn
+      else:
+        self._saveable_fn = HkvHashTable._Saveable
+      self.saveable = self._saveable_fn(
+          table=self,
+          name=_table_name,
+          full_name=_table_full_name,
+      )
+      if not context.executing_eagerly():
+        ops.add_to_collection(ops.GraphKeys.SAVEABLE_OBJECTS, self.saveable)
 
   def _create_resource(self):
     # The table must be shared if checkpointing is requested for multi-worker
@@ -145,17 +154,18 @@ class HkvHashTable(LookupInterface):
     # explicitly specified.
     use_node_name_sharing = self._checkpoint and self._shared_name is None
 
-    table_ref = hkv_ops.tfra_hkv_hash_table_of_tensors(
-        shared_name=self._shared_name,
-        use_node_name_sharing=use_node_name_sharing,
-        key_dtype=self._key_dtype,
-        value_dtype=self._value_dtype,
-        value_shape=self._default_value.get_shape(),
-        init_capacity=self._init_capacity,
-        max_capacity=self._max_capacity,
-        max_hbm_for_vectors=self._max_hbm_for_vectors,
-        name=self._name,
-    )
+    with ops.device(self._device):
+      table_ref = hkv_ops.tfra_hkv_hash_table_of_tensors(
+          shared_name=self._shared_name,
+          use_node_name_sharing=use_node_name_sharing,
+          key_dtype=self._key_dtype,
+          value_dtype=self._value_dtype,
+          value_shape=self._default_value.get_shape(),
+          init_capacity=self._init_capacity,
+          max_capacity=self._max_capacity,
+          max_hbm_for_vectors=self._max_hbm_for_vectors,
+          name=self._name,
+      )
 
     if context.executing_eagerly():
       self._table_name = None
@@ -392,6 +402,73 @@ class HkvHashTable(LookupInterface):
             self.resource_handle, Tkeys=self._key_dtype, split_size=split_size)
     return keys, metas
 
+  def save_to_file_system(self,
+                          dirpath,
+                          file_name=None,
+                          dirpath_env='TFRA_SAVED_KV',
+                          append_to_file=False,
+                          buffer_size=4194304,
+                          name=None):
+    """
+    Returns an operation to save the keys and values in table to dirpath. 
+    The keys and values will be stored in FileSystem, rewrited or appended to the filepath.
+    Args:
+      dirpath: A directory path to save the table.
+      dirpath_env: A environment variable stored a path to save the table, which priority higher than dirpath.
+      file_name: User custom file name for key/value prefix file name, default is self._name.
+      buffer_size: Number of keys in write buffer to file.
+      append_to_file: If true, operation will append data to the file but not write a new one.
+      name: Name for the operation.
+    Returns:
+      An operation to save the table.
+    """
+
+    with ops.name_scope(name, "%s_save_table" % self.name,
+                        [self.resource_handle]):
+      with ops.colocate_with(None, ignore_existing=True):
+        return hkv_ops.tfra_hkv_hash_table_save_to_file_system(
+            self.resource_handle,
+            dirpath=dirpath,
+            file_name=file_name if file_name else self._name,
+            key_dtype=self._key_dtype,
+            value_dtype=self._value_dtype,
+            dirpath_env=dirpath_env,
+            append_to_file=append_to_file,
+            buffer_size=buffer_size)
+
+  def load_from_file_system(self,
+                            dirpath,
+                            file_name=None,
+                            dirpath_env='TFRA_SAVED_KV',
+                            load_entire_dir=False,
+                            buffer_size=4194304,
+                            name=None):
+    """
+    Returns an operation to load keys and values to table from
+    FileSystem. The keys and values files are generated from `save_to_file_system`.
+    Args:
+      dirpath: A directory path stored the table keys and values.
+      dirpath_env: A environment variable stored a path to load the table, which priority higher than dirpath.
+      file_name: User custom file name for key/value prefix file name, default is self._name.
+      buffer_size: Number of keys in read buffer from file.
+      load_entire_dir: If true, operation will load all key value files in the dirpath regardless partition.
+      name: Name for the operation.
+    Returns:
+      An operation to load keys and values to table from FileSystem.
+    """
+    with ops.name_scope(name, "%s_load_table" % self.name,
+                        [self.resource_handle]):
+      with ops.colocate_with(None, ignore_existing=True):
+        return hkv_ops.tfra_hkv_hash_table_load_from_file_system(
+            self.resource_handle,
+            dirpath=dirpath,
+            file_name=file_name if file_name else self._name,
+            key_dtype=self._key_dtype,
+            value_dtype=self._value_dtype,
+            dirpath_env=dirpath_env,
+            load_entire_dir=load_entire_dir,
+            buffer_size=buffer_size)
+
   def save(self, filepath, buffer_size=4194304, name=None):
     """
     Returns an operation to save the keys and values in table to
@@ -443,15 +520,20 @@ class HkvHashTable(LookupInterface):
     """For object-based checkpointing."""
     # full_name helps to figure out the name-based Saver's name for this saveable.
     full_name = self._table_name
-    return {
-        "table":
-            functools.partial(
-                HkvHashTable._Saveable,
-                table=self,
-                name=self._name,
-                full_name=full_name,
-            )
-    }
+    self._new_obj_trackable = None  # reset _new_obj_trackable when save again
+    if self._checkpoint:
+      return {
+          "table":
+              functools.partial(
+                  self._saveable_fn,
+                  table=self,
+                  name=self._name,
+                  full_name=full_name,
+              )
+      }
+    else:
+      return {}
+
 
   class _Saveable(BaseSaverBuilder.SaveableObject):
     """SaveableObject implementation for HkvHashTable."""

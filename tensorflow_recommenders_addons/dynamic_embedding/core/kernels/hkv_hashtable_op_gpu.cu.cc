@@ -78,7 +78,7 @@ class HkvHashTableOfTensorsGpu final : public LookupInterface {
     OP_REQUIRES_OK(ctx, GetNodeAttr(kernel->def(), "max_hbm_for_vectors",
                                     &max_hbm_for_vectors_i64));
     OP_REQUIRES(
-        ctx, (max_hbm_for_vectors_i64 > 0),
+        ctx, (max_hbm_for_vectors_i64 >= 0),
         errors::InvalidArgument("params max_hbm_for_vectors less than 0"));
 
     options.init_capacity = static_cast<size_t>(init_capacity_i64);

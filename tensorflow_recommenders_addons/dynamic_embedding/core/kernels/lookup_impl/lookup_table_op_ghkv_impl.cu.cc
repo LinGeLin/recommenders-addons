@@ -20,8 +20,11 @@ namespace recommenders_addons {
 namespace lookup {
 namespace gpu {
 
+using HkvEvictStrategy = nv::merlin::EvictStrategy;
+
+
 #define DEFINE_PURE_GPU_HASHTABLE(key_type, value_type) \
-  template <>                                           \
+  template <>                                                     \
   class TableWrapper<key_type, value_type>
 
 DEFINE_PURE_GPU_HASHTABLE(int64, float);

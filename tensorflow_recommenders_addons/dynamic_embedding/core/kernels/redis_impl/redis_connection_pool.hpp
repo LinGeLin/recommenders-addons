@@ -869,6 +869,11 @@ every bucket has its own BucketContext for sending data---for locating reply-
     };
 
     std::vector<std::unique_ptr<redisReply, ::sw::redis::ReplyDeleter>> reply;
+    if (!redis_conn_read) {
+      LOG(ERROR) << "Redis connection failed. The default value will be returned";
+      reply.push_back(nullptr);
+      return reply;
+    }
     try {
       reply.push_back(redis_conn_read->command(cmd, argc, ptrs_0, sizes_0));
     } catch (const std::exception &err) {
@@ -926,7 +931,7 @@ every bucket has its own BucketContext for sending data---for locating reply-
         }
       } else {
         if (!print_once) {
-          LOG(WARNING)
+          LOG(ERROR)
               << "Redis reply from MgetCommend has some problems with error "
               << ", using default values to repalce.";
           print_once = true;

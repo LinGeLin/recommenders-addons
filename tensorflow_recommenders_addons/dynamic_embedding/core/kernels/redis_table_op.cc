@@ -358,6 +358,7 @@ class RedisTableOfTensors final : public LookupInterface {
     }
 
     std::vector<std::pair<unsigned, unsigned>> cluster_slots;
+    Status conn_status = TFOkStatus;
 
     // creat redis instance
     switch (redis_connection_params.redis_connection_mode) {
@@ -374,7 +375,12 @@ class RedisTableOfTensors final : public LookupInterface {
           OP_REQUIRES_OK(ctx, _table_instance->set_K_bucket_num_handle(
                                   KBucketNumCommonHandle<K>));
         }
-        OP_REQUIRES_OK(ctx, _table_instance->Conn());
+        // No error is reported when a connection is attempted but fails. Only an error log is displayed
+        conn_status =  _table_instance->Conn();
+        if (!conn_status.ok()) {
+          LOG(ERROR) << "Unable to connect to redis: " << conn_status.ToString();
+          break;
+        }
         if (redis_connection_params.redis_hash_tags_hypodispersion == false)
           cluster_slots = _table_instance->ClusterNodesSlots(false);
         break;
@@ -392,7 +398,10 @@ class RedisTableOfTensors final : public LookupInterface {
           OP_REQUIRES_OK(ctx, _table_instance->set_K_bucket_num_handle(
                                   KBucketNumCommonHandle<K>));
         }
-        OP_REQUIRES_OK(ctx, _table_instance->Conn());
+        conn_status =  _table_instance->Conn();
+        if (!conn_status.ok()) {
+          LOG(ERROR) << "Unable to connect to redis: " << conn_status.ToString();
+        }
         break;
       }
       case StandaloneMode: {
@@ -408,7 +417,10 @@ class RedisTableOfTensors final : public LookupInterface {
           OP_REQUIRES_OK(ctx, _table_instance->set_K_bucket_num_handle(
                                   KBucketNumCommonHandle<K>));
         }
-        OP_REQUIRES_OK(ctx, _table_instance->Conn());
+        conn_status =  _table_instance->Conn();
+        if (!conn_status.ok()) {
+          LOG(ERROR) << "Unable to connect to redis: " << conn_status.ToString();
+        }
         break;
       }
       default: {
@@ -504,7 +516,9 @@ class RedisTableOfTensors final : public LookupInterface {
     }
 
     // remove expiring time of buckets
-    OP_REQUIRES_OK(ctx, _table_instance->SetPersistBuckets(keys_prefix_name));
+    if (_table_instance->isRedisConnect) {
+      OP_REQUIRES_OK(ctx, _table_instance->SetPersistBuckets(keys_prefix_name));
+    }
 
     // allocate the memory of threads helper
     for (size_t i = 0; i < hardware_concurrency_; ++i) {

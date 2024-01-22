@@ -565,13 +565,13 @@ class RedisTable(LookupInterface):
     """SaveableObject implementation for RedisTable."""
 
     def __init__(self, table, name, full_name=""):
-      tensors = table.export()
-      specs = [
-          BaseSaverBuilder.SaveSpec(tensors[0], "", name + "-keys"),
-          BaseSaverBuilder.SaveSpec(tensors[1], "", name + "-values"),
-      ]
-      # pylint: disable=protected-access
-      super(RedisTable._Saveable, self).__init__(table, specs, name)
+      # tensors = table.export()
+      # specs = [
+      #     BaseSaverBuilder.SaveSpec(tensors[0], "", name + "-keys"),
+      #     BaseSaverBuilder.SaveSpec(tensors[1], "", name + "-values"),
+      # ]
+      # # pylint: disable=protected-access
+      # super(RedisTable._Saveable, self).__init__(table, specs, name)
       self._restore_name = table._name
 
     def restore(self, restored_tensors, restored_shapes, name=None):

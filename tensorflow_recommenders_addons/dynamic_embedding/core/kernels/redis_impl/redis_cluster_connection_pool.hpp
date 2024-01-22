@@ -90,8 +90,6 @@ class RedisWrapper<RedisInstance, K, V,
     try {
       auto redis_client = std::make_shared<RedisInstance>(
           RedisInstance(conn_opts, pool_opts, role));
-      redis_client->set("key test for connecting", "val test for connecting",
-                        std::chrono::milliseconds(1));
       if (this->RedisClusterEnabled(redis_client) == false) {
         LOG(ERROR)
             << "Now is cluster mode but try to connect Redis single node. "
@@ -168,6 +166,10 @@ class RedisWrapper<RedisInstance, K, V,
     if (bucket_context->ptrs->size() >= size_check) {
       ::sw::redis::StringView hkey((*bucket_context->ptrs)[1],
                                    (*bucket_context->sizes)[1]);
+      if (!redis_conn_read) {
+        LOG(ERROR) << "Redis connection failed. The default value will be returned";
+        return nullptr;
+      }
       try {
         return redis_conn_read->command(cmd, hkey, bucket_context->ptrs.get(),
                                         bucket_context->sizes.get());
@@ -1075,7 +1077,7 @@ every bucket has its own BucketContext for sending data---for locating reply-
         }
       } else {
         if (!print_once[bucket_loc]) {
-          LOG(WARNING) << "Redis reply in bucket_loc " << bucket_loc
+          LOG(ERROR) << "Redis reply in bucket_loc " << bucket_loc
                        << " from MgetCommend has some problems with error "
                        << ", using default values to repalce.";
           print_once[bucket_loc] = true;

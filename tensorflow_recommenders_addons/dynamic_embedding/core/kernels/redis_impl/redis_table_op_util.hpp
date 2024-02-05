@@ -74,6 +74,15 @@ Status launchFindCore(std::shared_ptr<RedisBaseWrapper<K, V>> _table_instance,
   auto reply =
       _table_instance->MgetCommand(keys, threads_Find.at(thread_context_id),
                                    begin, end, keys_prefix_name_slices);
+  if (reply.empty()) {
+    return Status(error::UNAVAILABLE, "Exit without any Redis connection.");
+  }
+
+  for (const auto& re : reply) {
+    if (nullptr == re) {
+      return Status(error::UNAVAILABLE, "Exit without any Redis connection.");
+    }
+  }
 
   auto statu =
       _table_instance->MgetToTensor(values, default_value, is_full_default,
